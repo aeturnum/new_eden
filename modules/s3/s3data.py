@@ -329,8 +329,9 @@ class S3DataTable(object):
                                     after the group title.
         """
 
+        attr_get = attr.get
         flist = self.colnames
-        action_col = attr.get("dt_action_col", 0)
+        action_col = attr_get("dt_action_col", 0)
         if action_col != 0:
             if action_col == -1 or action_col >= len(flist):
                 action_col = len(flist) - 1
@@ -338,8 +339,8 @@ class S3DataTable(object):
         # Get the details for any bulk actions. If we have at least one bulk
         # action then a column will be added, either at the start or in the
         # column identified by dt_bulk_col
-        bulkActions = attr.get("dt_bulk_actions", None)
-        bulkCol = attr.get("dt_bulk_col", 0)
+        bulkActions = attr_get("dt_bulk_actions", None)
+        bulkCol = attr_get("dt_bulk_col", 0)
         if bulkActions:
             if bulkCol > len(flist):
                 bulkCol = len(flist)
@@ -352,8 +353,8 @@ class S3DataTable(object):
                            id,
                            draw,
                            flist,
-                           action_col=action_col,
-                           stringify=stringify,
+                           action_col = action_col,
+                           stringify = stringify,
                            **attr)
 
     # -------------------------------------------------------------------------
@@ -386,7 +387,7 @@ class S3DataTable(object):
                                 by default it will be the column immediately
                                 before the first data item
                    dt_bulk_selected: A list of selected items
-                   dt_actions: dictionary of actions
+                   #dt_row_actions: a list of actions (each is a dict)
                    dt_styles: dictionary of styles to be applied to a list of ids
                               for example:
                               {"warning" : [1,3,6,7,9],
@@ -398,8 +399,9 @@ class S3DataTable(object):
         attr = Storage()
         if s3.datatable_ajax_source:
             attr.dt_ajax_url = s3.datatable_ajax_source
-        if s3.actions:
-            attr.dt_actions = s3.actions
+        # Defaults in htmlConfig() anyway:
+        #if s3.actions:
+        #    attr.dt_row_actions = s3.actions
         if s3.dataTableBulkActions:
             attr.dt_bulk_actions = s3.dataTableBulkActions
         if s3.dataTable_pageLength:
@@ -648,6 +650,7 @@ class S3DataTable(object):
                    dt_bulk_col: The column in which the checkboxes will appear,
                                 by default it will be the column immediately
                                 before the first data item
+                   dt_bulk_single: only allow a single row to be selected
                    dt_group: The column(s) that is(are) used to group the data
                    dt_group_totals: The number of record in each group.
                                     This will be displayed in parenthesis
@@ -659,7 +662,7 @@ class S3DataTable(object):
                                     the actual number of groups (giving an empty group).
                    dt_group_space: Insert a space between the group heading and the next group
                    dt_bulk_selected: A list of selected items
-                   dt_actions: dictionary of actions
+                   dt_row_actions: list of actions (each is a dict)
                    dt_styles: dictionary of styles to be applied to a list of ids
                               for example:
                               {"warning" : [1,3,6,7,9],
@@ -718,10 +721,10 @@ class S3DataTable(object):
 
         ajaxUrl = attr_get("dt_ajax_url", None)
         if not ajaxUrl:
-            url = URL(c=request.controller,
-                      f=request.function,
-                      args=request.args,
-                      vars=request.get_vars,
+            url = URL(c = request.controller,
+                      f = request.function,
+                      args = request.args,
+                      vars = request.get_vars,
                       )
             ajaxUrl = s3_set_extension(url, "aadata")
         config.ajaxUrl = ajaxUrl
@@ -745,6 +748,8 @@ class S3DataTable(object):
             bulkActions = [bulkActions]
         config.bulkActions = bulkActions
         config.bulkCol = bulkCol = attr_get("dt_bulk_col", 0)
+        if attr_get("dt_bulk_single"):
+            config.bulkSingle = 1
         action_col = attr_get("dt_action_col", 0)
         if bulkActions and bulkCol <= action_col:
             action_col += 1
@@ -778,7 +783,7 @@ class S3DataTable(object):
 
         # Activate double scroll and inject jQuery plugin
         if not settings.get_ui_datatables_responsive():
-            double_scroll = attr.get("dt_double_scroll")
+            double_scroll = attr_get("dt_double_scroll")
             if double_scroll is None:
                 double_scroll = settings.get_ui_datatables_double_scroll()
             if double_scroll:
@@ -1188,7 +1193,7 @@ class S3DataList(object):
         while group:
             yield group
             group = list(islice(iterable, length))
-        raise StopIteration
+        return
 
 # =============================================================================
 class S3DataListLayout(object):

@@ -34,7 +34,7 @@ def is_affiliated():
 
     if not auth.is_logged_in():
         return False
-    elif s3_has_role(ADMIN):
+    elif auth.s3_has_role("ADMIN"):
         return True
     else:
         table = auth.settings.table_user
@@ -371,7 +371,7 @@ def req_controller(template = False):
                     # Get the default Facility for this user
                     #if settings.has_module("hrm"):
                     #    hrtable = s3db.hrm_human_resource
-                    #    query = (hrtable.person_id == s3_logged_in_person())
+                    #    query = (hrtable.person_id == auth.s3_logged_in_person())
                     #    site = db(query).select(hrtable.site_id,
                     #                            limitby=(0, 1)).first()
                     #    if site:
@@ -732,7 +732,6 @@ $.filterOptionsS3({
                                 r.next = URL(args=[form_vars.id, "req_skill"])
                     else:
                         s3_action_buttons(r, deletable =False)
-                        s3_str = s3base.s3_str
                         # Add delete button for those records which are not completed
                         # @ToDo: Handle icons
                         table = r.table
@@ -770,7 +769,7 @@ $.filterOptionsS3({
                         #rows = db(query).select(table.id)
                         #restrict = [str(row.id) for row in rows]
                         #s3.actions.append(
-                        #    {"label": s3_str(T("View Items")),
+                        ##    {"label": s3_str(T("View Items")),
                         #     "url": URL(c = "req",
                         #                f = "req",
                         #                args = ["[id]", "req_item"],

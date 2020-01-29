@@ -59,13 +59,15 @@ def user():
     """ RESTful CRUD controller """
 
     table = auth.settings.table_user
-    sr = auth.get_system_roles()
+    s3_has_role = auth.s3_has_role
 
     # Check for ADMIN first since ADMINs have all roles
-    if s3_has_role(sr.ADMIN):
+    ADMIN = False
+    if s3_has_role("ADMIN"):
+        ADMIN = True
         pe_ids = None
 
-    elif s3_has_role(sr.ORG_ADMIN):
+    elif s3_has_role("ORG_ADMIN"):
         pe_ids = auth.get_managed_orgs()
         if pe_ids is None:
             # OrgAdmin with default realm, but user not affiliated with any org
@@ -88,8 +90,6 @@ def user():
     #                    auth_membership = "user_id",
     #                    )
 
-    s3_str = s3base.s3_str
-
     list_fields = ["first_name",
                    "last_name",
                    "email",
@@ -97,7 +97,7 @@ def user():
     lappend = list_fields.append
     if len(settings.get_L10n_languages()) > 1:
         lappend("language")
-    if auth.s3_has_role("ADMIN"):
+    if ADMIN:
         if settings.get_auth_admin_sees_organisation():
             lappend("organisation_id")
     elif settings.get_auth_registration_requests_organisation():
@@ -401,7 +401,7 @@ def group():
 
     tablename = "auth_group"
 
-    if not auth.s3_has_role(ADMIN):
+    if not auth.s3_has_role("ADMIN"):
         s3db.configure(tablename,
                        deletable = False,
                        editable = False,

@@ -41,6 +41,7 @@ __all__ = (# PR Base Entities
 
            # Person Components
            "PRAvailabilityModel",
+           "PRUnavailabilityModel",
            "PRDescriptionModel",
            "PREducationModel",
            "PRIdentityModel",
@@ -110,6 +111,7 @@ __all__ = (# PR Base Entities
            "pr_image_modify",
 
            # Other functions
+           "pr_availability_filter",
            "pr_import_prep",
 
            # Data List Default Layouts
@@ -1051,7 +1053,6 @@ class PRPersonModel(S3Model):
                                                   "multiple": False,
                                                   },
                        cr_shelter_registration_history = "person_id",
-                       deploy_unavailability = "person_id",
                        project_activity_person = "person_id",
                        supply_distribution_person = "person_id",
                        event_incident = {"link": "event_human_resource",
@@ -1094,6 +1095,7 @@ class PRPersonModel(S3Model):
                        # Appraisals
                        hrm_appraisal = "person_id",
                        # Availability
+                       pr_unavailability = "person_id",
                        pr_person_availability = {"name": "availability",
                                                  "joinby": "person_id",
                                                  # Will need tochange in future
@@ -3334,7 +3336,7 @@ class PRForumModel(S3Model):
         # Custom Methods
         set_method("pr", "forum",
                    method = "assign",
-                   action = pr_AssignMethod(component="forum_membership"))
+                   action = pr_AssignMethod(component = "forum_membership"))
 
         set_method("pr", "forum",
                    method = "join",
@@ -4847,6 +4849,64 @@ class PRAvailabilityModel(S3Model):
         configure(tablename,
                   deduplicate = S3Duplicate(primary=("availability_id", "slot_id")),
                   )
+
+        # ---------------------------------------------------------------------
+        # Pass names back to global scope (s3.*)
+        #
+        return {}
+
+# =============================================================================
+class PRUnavailabilityModel(S3Model):
+    """
+        Allow people to mark times when they are unavailable
+        - this is generally easier for longer-term volunteers than marking times
+          when they are available
+        - usually defined using the Organiser method
+    """
+
+    names = ("pr_unavailability",
+             )
+
+    def model(self):
+
+        T = current.T
+
+        tablename = "pr_unavailability"
+        self.define_table(tablename,
+                          self.pr_person_id(ondelete = "CASCADE"),
+                          s3_datetime("start_date",
+                                      label = T("Start Date"),
+                                      set_min = "#pr_unavailability_end_date",
+                                      ),
+                          s3_datetime("end_date",
+                                      label = T("End Date"),
+                                      set_max = "#pr_unavailability_start_date",
+                                      ),
+                          s3_comments(),
+                          *s3_meta_fields())
+
+        self.configure(tablename,
+                       organize = {"start": "start_date",
+                                   "end": "end_date",
+                                   "title": "comments",
+                                   "description": ["start_date",
+                                                   "end_date",
+                                                   ],
+                                   },
+                       )
+
+        # CRUD Strings
+        current.response.s3.crud_strings[tablename] = Storage(
+            label_create = T("Add Period of Unavailability"),
+            title_display = T("Unavailability"),
+            title_list = T("Periods of Unavailability"),
+            title_update = T("Edit Unavailability"),
+            label_list_button = T("List Periods of Unavailability"),
+            label_delete_button = T("Delete Unavailability"),
+            msg_record_created = T("Unavailability added"),
+            msg_record_modified = T("Unavailability updated"),
+            msg_record_deleted = T("Unavailability deleted"),
+            msg_list_empty = T("No Unavailability currently registered"))
 
         # ---------------------------------------------------------------------
         # Pass names back to global scope (s3.*)
@@ -6939,17 +6999,17 @@ class pr_PersonRepresent(S3Represent):
     """
 
     def __init__(self,
-                 lookup="pr_person",
-                 key=None,
-                 fields=None,
-                 labels=None,
-                 options=None,
-                 translate=False,
-                 linkto=None,
-                 show_link=False,
-                 multiple=False,
-                 default=None,
-                 none=None):
+                 lookup = "pr_person",
+                 key = None,
+                 fields = None,
+                 labels = None,
+                 options = None,
+                 translate = False,
+                 linkto = None,
+                 show_link = False,
+                 multiple = False,
+                 default = None,
+                 none = None):
 
         if show_link and not linkto:
             request = current.request
@@ -6999,12 +7059,12 @@ class pr_PersonRepresentContact(pr_PersonRepresent):
     """
 
     def __init__(self,
-                 labels=None,
-                 linkto=None,
-                 show_email=False,
-                 show_phone=True,
-                 access=None,
-                 show_link=True,
+                 labels = None,
+                 linkto = None,
+                 show_email = False,
+                 show_phone = True,
+                 access = None,
+                 show_link = True,
                  ):
         """
             Constructor
@@ -7546,13 +7606,28 @@ class pr_AssignMethod(S3Method):
         e.g. Team, Forum
     """
 
-    def __init__(self, component, next_tab=None#, types=None
+    def __init__(self,
+                 component,
+                 next_tab = None,
+                 #types = None,
+                 actions = None,
+                 filter_widgets = None,
+                 list_fields = None,
+                 postprocess = None,
+                 #rheader = None,
+                 title = None,
                  ):
         """
             @param component: the Component in which to create records
             @param next_tab: the component/method to redirect to after assigning
             @param types: a list of types to pick from: Users
                           (Staff/Vols/Members to come as-required)
+            @param actions: a custom list of Actions for the dataTable
+            @param filter_widgets: a custom list of FilterWidgets to show
+            @param list_fields: a custom list of Fields to show
+            @param postprocess: name of a settings.tasks.<function> postprocess function to act on all assigned person_ids at once
+            @param rheader: an rheader to show
+            @param title: an alternative page title
         """
 
         self.component = component
@@ -7561,6 +7636,12 @@ class pr_AssignMethod(S3Method):
         else:
             self.next_tab = component
         #self.types = types
+        self.actions = actions
+        self.filter_widgets = filter_widgets
+        self.list_fields = list_fields
+        self.postprocess = postprocess
+        #self.rheader = rheader
+        self.title = title
 
     # -------------------------------------------------------------------------
     def apply_method(self, r, **attr):
@@ -7661,18 +7742,28 @@ class pr_AssignMethod(S3Method):
                         _id = table.insert(**link)
                         if onaccept:
                             link["id"] = _id
-                            form = Storage(vars=link)
-                            onaccept(form)
+                            form = Storage(vars = link)
+                            if not isinstance(onaccept, list):
+                                onaccept = [onaccept]
+                            for callback in onaccept:
+                                callback(form)
                         added += 1
+                if self.postprocess is not None:
+                    # Run postprocess async as it may take some time to run
+                    current.s3task.run_async("settings_task",
+                                             args = [self.postprocess],
+                                             vars = {"record": record.as_json(),
+                                                     "selected": json.dumps(selected),
+                                                     })
 
             if r.representation == "popup":
                 # Don't redirect, so we retain popup extension & so close popup
                 response.confirmation = T("%(number)s assigned") % \
-                                            dict(number=added)
+                                            {"number": added}
                 return {}
             else:
                 current.session.confirmation = T("%(number)s assigned") % \
-                                                    dict(number=added)
+                                                    {"number": added}
                 if added > 0:
                     redirect(URL(args=[r.id, self.next_tab], vars={}))
                 else:
@@ -7680,48 +7771,37 @@ class pr_AssignMethod(S3Method):
 
         elif r.http == "GET":
 
-            # @ToDo: be able to configure Filter widgets
-            #if controller == "vol":
-            #    resource_type = "volunteer"
-            #elif len(types) == 1:
-            #    resource_type = "staff"
-            #else:
-            #    # Both
-            #    resource_type = None
-            #if r.controller == "req":
-            #    module = "req"
-            #else:
-            #    module = controller
-            #filter_widgets = hrm_human_resource_filters(resource_type=resource_type,
-            #                                            module=module)
-            filter_widgets = None
+            filter_widgets = self.filter_widgets
+            #if filter_widgets is None: # provide a default
 
             # List fields
-            list_fields = ["id",
-                           "first_name",
-                           "middle_name",
-                           "last_name",
-                           ]
-            if USERS:
-                db.auth_user.organisation_id.represent = s3db.org_OrganisationRepresent()
-                list_fields.append((current.messages.ORGANISATION, "user.organisation_id"))
-            elif tablename == "event_human_resource":
-                list_fields.append((current.messages.ORGANISATION, "human_resource.organisation_id"))
-            # @ToDo: be able to configure additional fields here, like:
-            #if len(types) == 2:
-            #    list_fields.append((T("Type"), "human_resource.type"))
-            #list_fields.append("human_resource.job_title_id")
-            #if settings.get_hrm_use_certificates():
-            #    list_fields.append((T("Certificates"), "certification.certificate_id"))
-            #if settings.get_hrm_use_skills():
-            #    list_fields.append((T("Skills"), "competency.skill_id"))
-            #if settings.get_hrm_use_trainings():
-            #    list_fields.append((T("Trainings"), "training.course_id"))
+            list_fields = self.list_fields
+            if list_fields is None:
+                list_fields = ["id",
+                               "first_name",
+                               "middle_name",
+                               "last_name",
+                               ]
+                if USERS:
+                    db.auth_user.organisation_id.represent = s3db.org_OrganisationRepresent()
+                    list_fields.append((current.messages.ORGANISATION, "user.organisation_id"))
+                elif tablename == "event_human_resource":
+                    list_fields.append((current.messages.ORGANISATION, "human_resource.organisation_id"))
+                # @ToDo: be able to configure additional fields here, like:
+                #if len(types) == 2:
+                #    list_fields.append((T("Type"), "human_resource.type"))
+                #list_fields.append("human_resource.job_title_id")
+                #if settings.get_hrm_use_certificates():
+                #    list_fields.append((T("Certificates"), "certification.certificate_id"))
+                #if settings.get_hrm_use_skills():
+                #    list_fields.append((T("Skills"), "competency.skill_id"))
+                #if settings.get_hrm_use_trainings():
+                #    list_fields.append((T("Trainings"), "training.course_id"))
 
             # Data table
             resource = s3db.resource("pr_person",
-                                     alias=r.component.alias if r.component else None,
-                                     vars=get_vars)
+                                     alias = r.component.alias if r.component else None,
+                                     vars = get_vars)
             totalrows = resource.count()
             if "pageLength" in get_vars:
                 display_length = get_vars["pageLength"]
@@ -7761,19 +7841,25 @@ class pr_AssignMethod(S3Method):
             dt_id = "datatable"
 
             # Bulk actions
-            dt_bulk_actions = [(T("Assign"), "assign")]
+            label = s3.crud.get("assign_button", "Assign")
+            dt_bulk_actions = [(T(label), "assign")]
 
             if r.representation in ("html", "popup"):
                 # Page load
                 resource.configure(deletable = False)
 
-                profile_url = URL(c = controller,
-                                  f = "person",
-                                  args = ["[id]", "profile"])
-                S3CRUD.action_buttons(r,
-                                      deletable = False,
-                                      read_url = profile_url,
-                                      update_url = profile_url)
+                # Actions
+                actions = self.actions
+                if actions is None:
+                    profile_url = URL(c = controller,
+                                      f = "person",
+                                      args = ["[id]", "profile"])
+                    S3CRUD.action_buttons(r,
+                                          deletable = False,
+                                          read_url = profile_url,
+                                          update_url = profile_url)
+                    actions = s3.actions
+
                 s3.no_formats = True
 
                 # Filter form
@@ -7781,65 +7867,65 @@ class pr_AssignMethod(S3Method):
 
                     # Where to retrieve filtered data from:
                     submit_url_vars = resource.crud._remove_filters(r.get_vars)
-                    filter_submit_url = r.url(vars=submit_url_vars)
+                    filter_submit_url = r.url(vars = submit_url_vars)
 
                     # Default Filters (before selecting data!)
-                    resource.configure(filter_widgets=filter_widgets)
+                    resource.configure(filter_widgets = filter_widgets)
                     S3FilterForm.apply_filter_defaults(r, resource)
 
                     # Where to retrieve updated filter options from:
                     filter_ajax_url = URL(f="person",
-                                          args=["filter.options"],
-                                          vars={})
+                                          args = ["filter.options"],
+                                          vars = {})
 
                     get_config = resource.get_config
                     filter_clear = get_config("filter_clear", True)
                     filter_formstyle = get_config("filter_formstyle", None)
                     filter_submit = get_config("filter_submit", True)
                     filter_form = S3FilterForm(filter_widgets,
-                                               clear=filter_clear,
-                                               formstyle=filter_formstyle,
-                                               submit=filter_submit,
-                                               ajax=True,
-                                               url=filter_submit_url,
-                                               ajaxurl=filter_ajax_url,
-                                               _class="filter-form",
-                                               _id="datatable-filter-form",
+                                               clear = filter_clear,
+                                               formstyle = filter_formstyle,
+                                               submit = filter_submit,
+                                               ajax = True,
+                                               url = filter_submit_url,
+                                               ajaxurl = filter_ajax_url,
+                                               _class = "filter-form",
+                                               _id = "datatable-filter-form",
                                                )
                     fresource = current.s3db.resource(resource.tablename)
                     alias = r.component.alias if r.component else None
                     ff = filter_form.html(fresource,
                                           r.get_vars,
-                                          target="datatable",
-                                          alias=alias)
+                                          target = "datatable",
+                                          alias = alias)
                 else:
                     ff = ""
 
                 # Data table (items)
                 data = resource.select(list_fields,
-                                       start=0,
-                                       limit=limit,
-                                       orderby=orderby,
-                                       left=left,
-                                       count=True,
-                                       represent=True)
+                                       start = 0,
+                                       limit = limit,
+                                       orderby = orderby,
+                                       left = left,
+                                       count = True,
+                                       represent = True)
                 filteredrows = data["numrows"]
                 dt = S3DataTable(data["rfields"], data["rows"])
-
                 items = dt.html(totalrows,
                                 filteredrows,
                                 dt_id,
-                                dt_ajax_url=r.url(representation="aadata"),
-                                dt_bulk_actions=dt_bulk_actions,
-                                dt_pageLength=display_length,
-                                dt_pagination="true",
-                                dt_searching="false",
+                                dt_ajax_url = r.url(representation="aadata"),
+                                dt_bulk_actions = dt_bulk_actions,
+                                dt_pageLength = display_length,
+                                dt_pagination = "true",
+                                dt_row_actions = actions,
+                                dt_searching = "false",
                                 )
 
                 response.view = "list_filter.html"
 
                 return {"items": items,
-                        "title": T("Assign People"),
+                        "title": self.title or T("Assign People"),
                         "list_filter_form": ff,
                         }
 
@@ -7851,20 +7937,19 @@ class pr_AssignMethod(S3Method):
                     echo = None
 
                 data = resource.select(list_fields,
-                                       start=0,
-                                       limit=limit,
-                                       orderby=orderby,
-                                       left=left,
-                                       count=True,
-                                       represent=True)
+                                       start = 0,
+                                       limit = limit,
+                                       orderby = orderby,
+                                       left = left,
+                                       count = True,
+                                       represent = True)
                 filteredrows = data["numrows"]
                 dt = S3DataTable(data["rfields"], data["rows"])
-
                 items = dt.json(totalrows,
                                 filteredrows,
                                 dt_id,
                                 echo,
-                                dt_bulk_actions=dt_bulk_actions)
+                                dt_bulk_actions = dt_bulk_actions)
                 response.headers["Content-Type"] = "application/json"
                 return items
 
@@ -7877,13 +7962,26 @@ class pr_AssignMethod(S3Method):
 def pr_compose():
     """
         Send message to people/teams/forums
+
+        @ToDo: Better rewritten as an S3Method
     """
 
-    #s3db = current.s3db
     get_vars = current.request.get_vars
     #pe_id = None
 
+    #if "person.id" in get_vars:
+    #    # CCC uses a custom version for messaging Donors re: Donations
+    #    fieldname = "person.id"
+    #    record_id = get_vars.get(fieldname)
+    #    table = current.s3db.pr_person
+    #    title = current.T("Message Person")
+    #    query = (table.id == record_id)
+    #    # URL to redirect to after message sent
+    #    url = URL(f="person", args=record_id)
+
+    #elif "forum.id" in get_vars:
     if "forum.id" in get_vars:
+        # Used by? WACOP?
         fieldname = "forum.id"
         record_id = get_vars.get(fieldname)
         pe_id = get_vars.pe_id
@@ -7907,11 +8005,11 @@ def pr_compose():
     #    db = current.db
     #    pe = db(query).select(table.pe_id,
     #                          limitby=(0, 1)).first()
-    #    if not pe:
+    #    try:
+    #        pe_id = pe.pe_id
+    #    except:
     #        current.session.error = current.T("Record not found")
     #        redirect(URL(f="index"))
-
-    #    pe_id = pe.pe_id
 
     # Create the form
     output = current.msg.compose(recipient = pe_id,
@@ -8417,11 +8515,12 @@ class pr_Template(S3Method):
                     if selector == "current_user.name":
                         user = current.auth.user
                         if user:
-                            doc_data[key] = s3_format_fullname(fname=user.first_name,
-                                                               lname=user.last_name,
-                                                               )
+                            username = s3_format_fullname(fname = user.first_name,
+                                                          lname = user.last_name,
+                                                          )
                         else:
-                            doc_data[key] = current.T("Unknown User")
+                            username = current.T("Unknown User")
+                        doc_data[key] = s3_unicode(username)
                     else:
                         rfield = rfields.get(prefix(selector))
                         if rfield:
@@ -9626,6 +9725,57 @@ def pr_image_modify(image_file,
         return True
     else:
         return False
+
+# =============================================================================
+def pr_availability_filter(r):
+    """
+        Filter requested resource (hrm_human_resource or pr_person) for
+        availability during a selected interval
+            - uses special filter selector "available" from GET vars
+            - called from prep of the respective controller
+            - adds resource filter for r.resource
+
+        @param r: the S3Request
+    """
+
+    get_vars = r.get_vars
+
+    # Parse start/end date
+    calendar = current.calendar
+    start = get_vars.pop("available__ge", None)
+    if start:
+        start = calendar.parse_datetime(start)
+    end = get_vars.pop("available__le", None)
+    if end:
+        end = calendar.parse_datetime(end)
+
+    utable = current.s3db.pr_unavailability
+
+    # Construct query for unavailability
+    query = (utable.deleted == False)
+    if start and end:
+        query &= ((utable.start_date >= start) & (utable.start_date <= end)) | \
+                 ((utable.end_date >= start) & (utable.end_date <= end)) | \
+                 ((utable.start_date < start) & (utable.end_date > end))
+    elif start:
+        query &= (utable.end_date >= start) | (utable.start_date >= start)
+    elif end:
+        query &= (utable.start_date <= end) | (utable.end_date <= end)
+    else:
+        return
+
+    # Get person_ids of unavailability-entries
+    rows = current.db(query).select(utable.person_id,
+                                    groupby = utable.person_id,
+                                    )
+    if rows:
+        person_ids = set(row.person_id for row in rows)
+
+        # Filter r.resource for non-match
+        if r.tablename == "hrm_human_resource":
+            r.resource.add_filter(~(FS("person_id").belongs(person_ids)))
+        elif r.tablename == "pr_person":
+            r.resource.add_filter(~(FS("id").belongs(person_ids)))
 
 # =============================================================================
 def pr_import_prep(data):
