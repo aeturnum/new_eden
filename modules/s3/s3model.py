@@ -416,7 +416,7 @@ class S3Model(object):
             Same as db.define_table except that it does not repeat
             a table definition if the table is already defined.
         """
-
+        print(f"define_table {tablename}")
         db = current.db
         if hasattr(db, tablename):
             table = ogetattr(db, tablename)
