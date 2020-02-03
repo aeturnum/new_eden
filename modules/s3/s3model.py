@@ -378,7 +378,9 @@ class S3Model(object):
         # Load models
         if models is not None:
             for name in models.__dict__:
+                print(f"Loading model: {name}")
                 if type(models.__dict__[name]).__name__ == "module":
+                    print(f"Loading model: {name}....loaded!")
                     cls.load(name)
 
         # Define importer tables
