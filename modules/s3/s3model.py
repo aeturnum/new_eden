@@ -351,8 +351,10 @@ class S3Model(object):
 
         if models is not None and hasattr(models, name):
             module = models.__dict__[name]
+            print(f"loading {module}...")
             for n in module.__all__:
                 model = module.__dict__[n]
+                print(f"loading {module}:{n}")
                 if type(model).__name__ == "type" and \
                    issubclass(model, S3Model):
                     model(name)
