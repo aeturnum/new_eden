@@ -1,6 +1,4 @@
-from materiality import Author, Change
-
-from pydriller import RepositoryMining
+from materiality import Crawler
 
 def test_basic():
     base = "/Users/ddrexler/src/python/web2py/"
@@ -13,13 +11,9 @@ def test_basic():
         "README.markdown"
     ]
 
+    c = Crawler(base)
     for file_name in files:
-        for commit in RepositoryMining(base, filepath=file_name).traverse_commits():
-            author = Author.find_author(commit.author)
-            for m in commit.modifications:
-                if (m.new_path == file_name):
-                    change = Change.from_commit_and_mod(commit, m)
-                    author.add_change(change)
+        c.crawl_file(file_name)
 
-    for a in Author.authors:
+    for a in c.authors:
         print(a)
