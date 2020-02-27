@@ -15,5 +15,5 @@ def test_basic():
     for file_name in files:
         c.crawl_file(file_name)
 
-    for a in c.authors:
+    for a in c.files.values():
         print(a)
