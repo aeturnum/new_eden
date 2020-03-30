@@ -193,6 +193,17 @@ version = "1.8.1"
 
 [[package]]
 category = "main"
+description = "Display module dependencies"
+name = "pydeps"
+optional = false
+python-versions = "*"
+version = "1.9.0"
+
+[package.dependencies]
+stdlib-list = "*"
+
+[[package]]
+category = "main"
 description = "Framework for MSR"
 name = "pydriller"
 optional = false
@@ -285,6 +296,17 @@ python-versions = ">=2.7, !=3.0.*, !=3.1.*, !=3.2.*, !=3.3.*"
 version = "3.0.1"
 
 [[package]]
+category = "main"
+description = "A list of Python Standard Libraries (2.6-7, 3.2-8)."
+name = "stdlib-list"
+optional = false
+python-versions = "*"
+version = "0.6.0"
+
+[package.extras]
+develop = ["sphinx"]
+
+[[package]]
 category = "dev"
 description = "tasks runner for python projects"
 name = "taskipy"
@@ -349,7 +371,7 @@ docs = ["sphinx", "jaraco.packaging (>=3.2)", "rst.linker (>=1.9)"]
 testing = ["jaraco.itertools", "func-timeout"]
 
 [metadata]
-content-hash = "994fbc01f47353e242b973bb8de7e6fcb830680d128700b669e9a88d961d5242"
+content-hash = "bf9c02eecd4f382e950e7c6abd23fb34c3ad28086c54e374743ffcbe77f5a91b"
 python-versions = "^3.6"
 
 [metadata.files]
@@ -452,6 +474,10 @@ py = [
     {file = "py-1.8.1-py2.py3-none-any.whl", hash = "sha256:c20fdd83a5dbc0af9efd622bee9a5564e278f6380fffcacc43ba6f43db2813b0"},
     {file = "py-1.8.1.tar.gz", hash = "sha256:5e27081401262157467ad6e7f851b7aa402c5852dbcb3dae06768434de5752aa"},
 ]
+pydeps = [
+    {file = "pydeps-1.9.0-py2-none-any.whl", hash = "sha256:59d6d0f5a2b8ebdb11caf0439dd36ad7b918de7c8c338ba9d526b8fd700a346d"},
+    {file = "pydeps-1.9.0.tar.gz", hash = "sha256:ba9b8c7d72cb4dfd3f4dd6b8a250c240d15824850a415fd428f2660ed371361f"},
+]
 pydriller = [
     {file = "PyDriller-1.11-py3-none-any.whl", hash = "sha256:10243aaa461e001a84dac610301a4af5cc5bc74d4bd5d7ce6e5fa85cd773aae4"},
     {file = "PyDriller-1.11.tar.gz", hash = "sha256:acd936e1e5902f8ddf10dddc678d2d244be53ee4ac73a800ee7083d707dfb8ff"},
@@ -484,6 +510,9 @@ six = [
 smmap = [
     {file = "smmap-3.0.1-py2.py3-none-any.whl", hash = "sha256:5fead614cf2de17ee0707a8c6a5f2aa5a2fc6c698c70993ba42f515485ffda78"},
     {file = "smmap-3.0.1.tar.gz", hash = "sha256:171484fe62793e3626c8b05dd752eb2ca01854b0c55a1efc0dc4210fccb65446"},
+]
+stdlib-list = [
+    {file = "stdlib-list-0.6.0.tar.gz", hash = "sha256:133cc99104f5a4e1604dc88ebb393529bd4c2b99ae7e10d46c0b596f3c67c3f0"},
 ]
 taskipy = [
     {file = "taskipy-1.1.3-py3-none-any.whl", hash = "sha256:b5c94e1d06d5f5d10b916c29e12615c34ab701e2132fcdb5024572c728c83595"},

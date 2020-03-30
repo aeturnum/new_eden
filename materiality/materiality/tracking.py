@@ -44,20 +44,23 @@ class ChangeStats(Logger):
         return str(self)
 
 class Author(Logger):
+    _NAME = "Change"
 
     authors = []
 
+
+
     @staticmethod
     def find_author(commit_author):
-        dlog(f'Author::find_author ({commit_author.name, commit_author.email})')
+        dlog(f'Author::find_author', f'({commit_author.name, commit_author.email})')
         for a in Author.authors:
             if a.name == commit_author.name or a.email == commit_author.email:
                 if commit_author.name not in a.names or commit_author.email not in a.email:
                     if commit_author.name not in a.names:
-                        wlog(f'\tAuthor::find_author|incomplete match[name] {commit_author.name} not in {a.names} ')
+                        wlog(f'\tAuthor::find_author', f'incomplete match[name] {commit_author.name} not in {a.names} ')
                     if commit_author.email not in a.emails:
-                        wlog(f'\tAuthor::find_author|incomplete match[email] {commit_author.email} not in {a.emails}')
-                dlog(f'Author::find_author found: {a}')
+                        wlog(f'\tAuthor::find_author', f'incomplete match[email] {commit_author.email} not in {a.emails}')
+                dlog(f'Author::find_author', f'found: {a}')
                 a.merge(commit_author)
                 return a
 
@@ -126,7 +129,7 @@ class Author(Logger):
         return self._top_email
 
     def add_change(self, change):
-        self.dlog(f'{self}::add_change <- {change}')
+        self.dlog('add_change', f'<- {change}')
         self.changes.append(change)
         self.stats.merge_change_stat(change.stats)
 
@@ -146,6 +149,9 @@ class Author(Logger):
 
 
 class Change(Logger):
+
+    _NAME = "Change"
+
     # todo: figure out how to avoid duplicate changes
     @staticmethod
     def from_commit_and_mod(commit, mod):
@@ -164,7 +170,7 @@ class Change(Logger):
         self.author = Author.find_author(commit.author)
         self.author.add_change(self)
 
-        self.dlog(f'Created {self}')
+        self.dlog(f'__init__', f'Created')
 
     def __str__(self):
         return f'Change[{self.path}]{self.stats}'
@@ -173,6 +179,8 @@ class Change(Logger):
         return str(self)
 
 class File(Logger):
+
+    _NAME = "File"
 
     files = {}
 
@@ -196,6 +204,7 @@ class File(Logger):
         self.stats = ChangeStats()
 
     def add_change(self, change):
+        self.dlog(f'add_change', f'Adding {change} to {self}')
         self.changes.append(change)
         self.stats.merge_change_stat(change.stats)
         self.authors.add(change.author)

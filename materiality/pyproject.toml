@@ -8,6 +8,7 @@ authors = ["Daniel \"Drex\" Drexler <aeturnum@gmail.com>"]
 python = "^3.6"
 pydriller = "^1.11"
 pytest = "^5.3.5"
+pydeps = "^1.9.0"
 
 [tool.poetry.dev-dependencies]
 pylint = "^2.4.4"

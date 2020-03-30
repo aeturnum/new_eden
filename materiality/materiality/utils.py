@@ -1,28 +1,35 @@
 
+from functools import partialmethod
+
 VERBOSE = 0
 DEBUG = 1
 WARN = 2
 ERROR = 3
 
-log_level = WARN
+log_level = DEBUG
 
 
-def _record(s, **kwargs):
-    print(s)
+def _record(level, func,s, **kwargs):
+    print(f'[{level}]{func}| {s}')
 
 def level(log_override = None):
     global log_level
     return log_override or log_level
 
-def dlog(s, **kwargs):
+def dlog(func, s, **kwargs):
     global level
     if level(**kwargs) <= DEBUG:
-        _record(s, **kwargs)
+        _record('D', func, s, **kwargs)
 
-def wlog(s, **kwargs):
+def wlog(func, s, **kwargs):
     global level
     if level(**kwargs) <= WARN:
-        _record(s, **kwargs)
+        _record('W', func, s, **kwargs)
+
+def elog(func, s, **kwargs):
+    global level
+    if level(**kwargs) <= ERROR:
+        _record('!!E!!', func, s, **kwargs)
 
 class Logger:
     VERBOSE = VERBOSE
@@ -30,13 +37,34 @@ class Logger:
     WARN = WARN
     ERROR = ERROR
 
+    _NAME = "Logger"
+
     def __init__(self, special_log_level=None):
         self._own_level = special_log_level
 
-    def dlog(self, s):
-        global dlog
-        dlog(s, log_override = self._own_level)
+    def _construct_log_string(self, func):
+        return f'{self._NAME}::{func}'
 
-    def wlog(self, s):
+    def gen_dlog(self, func):
         global dlog
-        wlog(s, log_override = self._own_level)
+        override = self._own_level
+        log_str = self._construct_log_string(func)
+        return lambda s: dlog(log_str, s, log_override = override)
+
+    def gen_wlog(self, func):
+        global dlog
+        override = self._own_level
+        log_str = self._construct_log_string(func)
+        return lambda s: wlog(log_str, s, log_override = override)
+
+    def dlog(self, func, s):
+        global dlog
+        dlog(self._construct_log_string(func), s, log_override = self._own_level)
+
+    def wlog(self, func, s):
+        global dlog
+        wlog(self._construct_log_string(func), s, log_override = self._own_level)
+
+    def elog(self, func, s):
+        global dlog
+        elog(self._construct_log_string(func), s, log_override = self._own_level)
