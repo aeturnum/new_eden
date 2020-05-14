@@ -37,9 +37,9 @@ class DependencyFinder(Logger):
         # print(find_spec("gluon.widget"))
 
         mc = ModuleCrawler(join(self.base, file_name))
-        mc.step()
-        # while not mc.done:
-        #     mc.step()
+        # mc.step()
+        while not mc.done:
+            mc.step()
         #
         # mc.find_roots()
         # mc.step()
