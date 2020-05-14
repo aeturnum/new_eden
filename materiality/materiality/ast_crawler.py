@@ -8,84 +8,84 @@ from itertools import chain
 
 from .utils import Logger
 
-_Common_Exception = "find_spec system call raised an "
+_Common_Exception = "find_spec raised a"
+
 
 class SpecWrapper(Logger):
 
     _NAME = "SpecWrapper"
 
     # normal errors
-    ERROR_NOT_FOUND = "Module could not be found in path"
-    ERROR_SYSTEM_LIBRARY = "Module is a system library"
+    NOT_FOUND = "Module Not Found"
+    SYSTEM_LIBRARY = "System Module"
     # exceptions
-    ERROR_EXCEPTION = _Common_Exception
-    ERROR_ATTRIBUTE_EXCEPTION = f"{_Common_Exception}AttributeError"
-    ERROR_MODULE_NOT_FOUND_EXCEPTION = f"{_Common_Exception}ModuleNotFoumdError"
-    ERROR_VALUE_EXCEPTION = f'{_Common_Exception}ValueError'
+    EXCEPTION = _Common_Exception
+    ATTRIBUTE_EXCEPTION = f"{_Common_Exception}n AttributeError"
+    MODULE_NOT_FOUND_EXCEPTION = f"{_Common_Exception}ModuleNotFoumdError"
+    VALUE_EXCEPTION = f'{_Common_Exception}ValueError'
 
     def __init__(self, name, **kwargs):
         super().__init__(**kwargs)
         self.name = name
         self.members = None
         self.spec = None
-        self.error = None
+        self.ignore_reason = None
 
         self._resolve_spec()
 
     def _find_spec(self, name):
-        dlog = self.gen_dlog("_find_spec")
+        log = self.logger("_find_spec")
+        log.v(f"{name}")
 
-        if self.error:
-            dlog(f'Module "{name}" has error, not finding spec')
-            return (name, None)
+        if self.ignore_reason:
+            log.d(f'Ignoring Module "{name}", not finding spec')
+            return name, None
 
         spec = None
         exception = None
-        error = None
+        ignore_reason = None
 
         try:
             spec = find_spec(name)
             # clear previous errors on success
         except AttributeError as e:  # __future__ crashes find_spec lol
-            error = self.ERROR_ATTRIBUTE_EXCEPTION
+            ignore_reason = self.ATTRIBUTE_EXCEPTION
             exception = e
         except ModuleNotFoundError as e:  # seen sometimes
-            error = self.ERROR_MODULE_NOT_FOUND_EXCEPTION
+            ignore_reason = self.MODULE_NOT_FOUND_EXCEPTION
             exception = e
         except ValueError as e:
-            error = self.ERROR_VALUE_EXCEPTION
+            ignore_reason = self.VALUE_EXCEPTION
             exception = e
-
 
         if spec is None and '.' in name:
             # might be a X from Y situation rendered as X.Y, remove a dot and try that as the module
             (maybe_module, new_member) = name.rsplit('.', 1)
-            dlog(f'Module "{name}" can\'t be found, trying {maybe_module}')
+            log.d(f'Module "{name}" can\'t be found, trying {maybe_module}')
 
             return self._find_spec(maybe_module)
 
         if exception:
-            self.error = error
-            dlog(f'name "{self}" raised: {exception}')
+            self.ignore_reason = ignore_reason
+            log.d(f'name "{self}" raised: {exception}')
 
-        return (name, spec)
-
+        return name, spec
 
     def _resolve_spec(self):
-        dlog = self.gen_dlog("_resolve_spec")
-        dlog(f"{self.name}")
+        log = self.logger("_find_spec")
+        log.v(f"")
         (found_name, spec) = self._find_spec(self.name)
 
         if spec:
             # dlog(f'Checking if spec is system spec: {spec}')
             if spec.origin and 'site-packages' not in spec.origin:
                 # builtin case 1
-                dlog(f'Module "{self.name}" is not in sitepackages, it is a builtin.')
-                self.error = self.ERROR_SYSTEM_LIBRARY
+                log.d(f'Module "{self.name}" is not in sitepackages, it is a builtin.')
+                self.ignore_reason = self.SYSTEM_LIBRARY
             elif spec.loader and spec.loader is BuiltinImporter:
                 # builtin case 2
-                dlog(f'Module "{self.name}" uses the buildin importer.')
-                self.error = self.ERROR_SYSTEM_LIBRARY
+                log.d(f'Module "{self.name}" uses the buildin importer.')
+                self.ignore_reason = self.SYSTEM_LIBRARY
 
             # we're importing a submodule
             if found_name != self.name:
@@ -94,12 +94,16 @@ class SpecWrapper(Logger):
 
                 self.members = members.strip(".")
 
-                dlog(f'{self.name} -> {found_name}; {self.members}')
+                log.v(f'{self.name} -> {found_name}; {self.members}')
                 self.name = found_name
 
             self.spec = spec
         else:
-            dlog(f'Module {self.name} does not appear to be installed in current path.')
+            log.w(f'Module {self.name} does not appear to be installed in current path.')
+
+    @property
+    def full_module(self):
+        return self.spec and self.members is None
 
     @property
     def origin(self):
@@ -107,16 +111,17 @@ class SpecWrapper(Logger):
 
     @property
     def is_error(self):
-        return self.error != None
+        return self.ignore_reason != None
 
     def __str__(self):
         base = f'{self.name}|'
         if self.is_error:
-            return f'{base}Err[{self.error}]'
+            return f'{base}Err[{self.ignore_reason}]'
         return f'{base} {self.spec}'
 
     def __repr__(self):
         return str(self)
+
 
 class PrintCtx(object):
     ctx_obj: str = None
@@ -198,43 +203,12 @@ class ImportContext(Logger):
         return self._src == self.Source_Local
 
     @property
-    def specs(self):
-        dlog = self.gen_dlog('spec')
-
+    def specs(self) -> Dict[str, SpecWrapper]:
         specs = {}
         for name in self.names:
             spec = SpecWrapper(name)
             # print(spec)
             specs[name] = spec
-            # try:
-            #     spec = find_spec(name)
-            # except AttributeError: # __future__ crashes find_spec lol
-            #     dlog(f'name "{name}" raised AttributeError')
-            #     continue
-            #
-            # if spec is None and '.' in name:
-            #     # might be a X from Y situation rendered as X.Y, remove a dot and try that as the module
-            #     (maybe_module, member) = name.rsplit('.', 1)
-            #     dlog(f'Module "{name}" can\'t be found, trying {maybe_module}')
-            #     spec = find_spec(maybe_module)
-            #     if spec:
-            #         name = maybe_module
-            #
-            # if spec is None:
-            #     dlog(f'Module {name} does not appear to be installed in current path.')
-            #     # dlog(f'Module {name} does not appear to be installed in current path: {sys.path}')
-            # else:
-            #     dlog(f'Checking if spec is system spec: {spec}')
-            #     if spec.origin and 'site-packages' not in spec.origin:
-            #         # builtin case 1
-            #         dlog(f'Module "{name}" is not in sitepackages, it is a builtin.')
-            #         continue
-            #     if spec.loader and spec.loader is BuiltinImporter:
-            #         # builtin case 2
-            #         dlog(f'Module "{name}" uses the buildin importer.')
-            #         continue
-            #
-
 
         return specs
 
@@ -326,6 +300,7 @@ class ASTWrapper(Logger):
     def __init__(self, node: ast.AST, parent: 'ASTWrapper' = None, log_node = False):
         super().__init__()
 
+        log = self.logger("__init__")
         self.node = node
 
         self.parent = parent
@@ -340,9 +315,9 @@ class ASTWrapper(Logger):
             self._first_line = self.line
             self._last_line = self.line
 
-        # self.wlog('_i_', f'{self}')
+        # log.w(f'{self}')
         if self.has_children:
-            # self.wlog('_i_', f'>has children')
+            # log.w(f'>has children')
             child_keys = self._NODES_WITH_CHILDREN_TO_KEYS[self._n_class]
             for key in child_keys:
                 container = getattr(self.node, key, None)
@@ -350,7 +325,7 @@ class ASTWrapper(Logger):
                     for element in container:
                         self.children.append(self._make_child_wrapper(element))
                     output = '\n\t' + '\n\t'.join([str(c) for c in self.children])
-                    # self.wlog('_i_', f'{self.node.__class__.__name__}[{key}] = {output}')
+                    # log.w(f'{self.node.__class__.__name__}[{key}] = {output}')
 
         self._handle_node_symbol()
 
@@ -361,9 +336,11 @@ class ASTWrapper(Logger):
                 self._imports.extend(parent._get_scope_imports())
 
         if self.log_node:
-            self.dlog("i",f'{self}')
+            log.d("i",f'{self}')
 
     def _handle_node_symbol(self):
+        log = self.logger("_handle_node_symbol")
+        log.v("")
         if not self._node_adds_symbol or not self.parent:
             return
 
@@ -374,7 +351,7 @@ class ASTWrapper(Logger):
         if symbol_member is None:
             raise ValueError(f"{self}: expected to find a symbol!")
 
-        values = [self]
+        values = [self._get_r_side_node()]
         # self.wlog('_i_:node_adds_symbol', f'{self}({symbol_member})')
         if self._n_class in self._SYMBOL_BY_EXPR:
             # Symbol is contained in an expression, that must be resolved first
@@ -384,14 +361,92 @@ class ASTWrapper(Logger):
             symbol_names = [symbol_member]  # makes the processing easier if it's always a list
 
         if len(symbol_names) > 0:
-            if len(symbol_names) != len(values):
-                self.wlog(
-                    "_child_adds_symbol",
-                    f"{self}:{len(symbol_names)}syms != {len(values)}vals! Symbol table may be flawed!"
-                )
+            if len(symbol_names) > 1 and len(values) == 1:
+                # try unpacking the values
+                values = self._try_explode_values(values[0])
+
+                if len(symbol_names) > 1 and len(values) == 1:
+                    log.d(f"many symbols to one value! Likely a function unpacking!\n\t\t\t\t{self}")
+            elif len(symbol_names) != len(values):
+                log.w(f"{len(symbol_names)}syms != {len(values)}vals! Symbol table may be flawed!\n\t\t\t\t{self}")
+
             self.parent._child_adds_symbol(symbol_names, values)
         # else:
-        #     self.wlog('_handle_node_symbol', f'Skipping add because we generated no symbols')
+        #     log.w('_handle_node_symbol', f'Skipping add because we generated no symbols')
+
+    def _get_r_side_node(self):
+        log = self.logger("_get_r_side_node")
+        log.v(f"{self.node}")
+
+
+        # FunctionDef(identifier name, arguments args, stmt* body, expr* decorator_list, expr? returns)
+        # | AsyncFunctionDef(identifier name, arguments args, stmt* body, expr* decorator_list, expr? returns)
+        # | ClassDef(identifier name, expr* bases, keyword* keywords, stmt* body, expr* decorator_list)
+        # | Assign(expr* targets, expr value)
+        # | AugAssign(expr target, operator op, expr value)
+        # | AnnAssign(expr target, expr annotation, expr? value, int simple)
+
+        node = self.node
+        # get the right hand side of the statement
+        if isinstance(node, ast.Assign):
+            node = node.value
+        elif isinstance(node, ast.AugAssign):
+            node = node.value
+        elif isinstance(node, ast.AnnAssign):
+            node = node.value
+
+        return node
+
+    def _try_explode_values(self, node):
+        log = self.logger("_try_explode_values")
+        values = []
+
+        if isinstance(node, ast.Tuple):
+            # | Tuple(expr* elts, expr_context ctx)
+            for expr in node.elts:
+                values.append(expr)
+        else:
+            values.append(node)
+
+        return values
+
+    def _resolve_expr_symbols(self, exprs):
+        log = self.logger("_handle_node_symbol")
+        if not isinstance(exprs, list):
+            exprs = [exprs]
+
+        # log.v(f'Exprs: {", ".join([self.node_str(e) for e in exprs])}')
+        # log.v(f'Exprs: {exprs}')
+        result = []
+        for e in exprs:
+            out = []
+            if isinstance(e, ast.Name):
+                # | Name(identifier id, expr_context ctx)
+                out.append(f'{e.id}')
+            elif isinstance(e, ast.Attribute):
+                # | Attribute(expr value, identifier attr, expr_context ctx)
+                # this expects a list
+                value_strings = self._resolve_expr_symbols(e.value)
+                if not isinstance(value_strings, list) or len(value_strings) != 1:
+                    raise Exception(f"This is an unexpected format: {value_strings}")
+                out.append(f'{value_strings[0]}.{e.attr}')
+            elif isinstance(e, ast.Tuple):
+                # | Tuple(expr* elts, expr_context ctx)
+                for expr in e.elts:
+                    for identifier in self._resolve_expr_symbols(expr):
+                        out.append(identifier)
+            elif isinstance(e, ast.Subscript):
+                # | Subscript(expr value, slice slice, expr_context ctx)
+                # This will always be adding a symbol to something that's already in our symbol table and I think we can safely ignore it
+                pass
+            else:
+                log.w(f'\tExpr({e})({self.node_str(e)}) does not seem to generate a symbol, skipping')
+                continue
+
+            # log.d('_resolve_expr_symbols', f'\t{out}')
+            result.extend(out)
+
+        return result
 
     def _child_adds_symbol(self, symbol_names: List[str], values: List[Any]) -> None:
         """
@@ -436,44 +491,6 @@ class ASTWrapper(Logger):
 
             # todo: create some kind of index reference!
             self._symbols[name] = last_value
-
-    def _resolve_expr_symbols(self, exprs):
-        if not isinstance(exprs, list):
-            exprs = [exprs]
-        # dig into these exprs and see what's what
-        # todo: check that this is working better
-        # self.dlog('_resolve_expr_symbols', f'Exprs: {", ".join([self.node_str(e) for e in exprs])}')
-        # self.dlog('_resolve_expr_symbols', f'Exprs: {exprs}')
-        result = []
-        for e in exprs:
-            out = []
-            if isinstance(e, ast.Name):
-                # | Name(identifier id, expr_context ctx)
-                out.append(f'{e.id}')
-            elif isinstance(e, ast.Attribute):
-                # | Attribute(expr value, identifier attr, expr_context ctx)
-                # this expects a list
-                value_strings = self._resolve_expr_symbols(e.value)
-                if not isinstance(value_strings, list) or len(value_strings) != 1:
-                    raise Exception(f"This is an unexpected format: {value_strings}")
-                out.append(f'{value_strings[0]}.{e.attr}')
-            elif isinstance(e, ast.Tuple):
-                # | Tuple(expr* elts, expr_context ctx)
-                for expr in e.elts:
-                    for identifier in self._resolve_expr_symbols(expr):
-                        out.append(identifier)
-            elif isinstance(e, ast.Subscript):
-                # | Subscript(expr value, slice slice, expr_context ctx)
-                # This will always be adding a symbol to something that's already in our symbol table and I think we can safely ignore it
-                pass
-            else:
-                self.dlog('_resolve_expr_symbols', f'\tExpr({e})({self.node_str(e)}) does not seem to generate a symbol, skipping')
-                continue
-
-            # self.dlog('_resolve_expr_symbols', f'\t{out}')
-            result.extend(out)
-
-        return result
 
     def _make_child_wrapper(self, element):
         wrapper = ASTWrapper(element, self, log_node = self.log_node)
@@ -754,8 +771,8 @@ class ASTWrapper(Logger):
             return '{}For {}, {}\n\t\t'.format(
                 line_str,
                 target_str, iter_str,
-                    body_str,
-                    else_str
+                body_str,
+                else_str
             )
 
         # | AsyncFor(expr target, expr iter, stmt* body, stmt* orelse)
@@ -1077,3 +1094,6 @@ class ASTWrapper(Logger):
     def __repr__(self):
         return self.node_str(self.node)
 
+def ast_wrapper_for_file(path):
+    with open(path, "rt") as file:
+        return ASTWrapper(ast.parse(file.read(), filename=path))

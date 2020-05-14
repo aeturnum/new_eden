@@ -1,23 +1,9 @@
-# from pathlib import Path, WindowsPath, PosixPath
-# import json
-# from importlib.util import find_spec
-# from importlib.machinery import BuiltinImporter
-# import sys
-import ast
-# from copy import deepcopy, copy
-# from itertools import chain
-
-# import os
 from os import getcwd, listdir, remove
 from os.path import join, splitext
 from typing import Mapping, Set, List, Optional, Dict, Any
 
-# from pydeps.target import Target
-# from pydeps import pydeps
-# from pydeps.py2depgraph import py2dep
-
 from .utils import Logger
-from .ast_crawler import ImportContext, ASTWrapper
+from .ast_crawler import ImportContext, ASTWrapper, SpecWrapper, ast_wrapper_for_file
 from findimports import find_imports, ImportInfo, ModuleGraph
 
 class PathWrapper(str):
@@ -26,25 +12,59 @@ class PathWrapper(str):
     def python_file(self):
         return splitext(self)[1] in ['.py', '.pyc']
 
+class FakeSpec(SpecWrapper):
+    def __init__(self, name: str, path: str, **kwargs):
+        super().__init__(name, **kwargs)
+        self.name = name
+        self._path = path
+
+    def _resolve_spec(self):
+        pass
+
+    @property
+    def origin(self):
+        return self._path
+
 class ModuleListingWrapper(Logger):
+    """
+    Wrapper to manage import links
+
+    The problem that I need to address next is that there's no difference between two different kinds of imports:
+        - import X
+        - from X import Y
+    In the graph represented by ModuleListingWrapper.
+    The SpecWrappers can differentiate between them and the ASTWrappers' symbol tables should be useful here, and is
+    probably what I need in order to avoid cycles in the import graph.
+
+    The other option is that I change the system so that I'm using different systems to track:
+        - Which files I have scanned and which imports they contain
+        - The Import graph
+
+    """
     _NAME = 'ModuleListingWrapper'
 
-    def __init__(self, value_dict, **kwargs):
+    def __init__(self, spec, **kwargs):
         super().__init__(**kwargs)
+        log = self.logger("__init__")
+
         # strings
-        self.imports: List[ImportContext]  = value_dict.get('imports', [])
+        self.imports: List[ImportContext] = []
         # strings
-        self.imported_by: List[str] = value_dict.get('imported_by', [])
-        self.name: str = value_dict.get('name')
-        self.error: str = value_dict.get('error', None)
+        self.imported_by: List[str] = []
+        self.spec: SpecWrapper = spec
+        # self.name: str = value_dict.get('name')
+        # self.ignore_reason: str = value_dict.get('ignore_reason', None)
         self.path = None
 
-        path = value_dict.get('path', None)
-        if path is None and not self.error:
-            self.elog('__init__', f'Path is None! args:{value_dict}')
+        path = spec.origin
+        if path == "built-in":
+            path = None
+
+        if path is None and not self.ignore_reason:
+            log.e(f'Path is None! args:{spec}')
 
         # if self.error is not None:
-        #     self.wlog("__init__", f'{self.name}[ERROR] -> {self.error}')
+        #     self.wlog(f'{self.name}[ERROR] -> {self.error}')
 
         if path:
             self.path: PathWrapper = PathWrapper(path)
@@ -64,26 +84,33 @@ class ModuleListingWrapper(Logger):
             if self._is_submodule(imp):
                 self.implicit = True
 
-        # self.dlog('__init__', f'Creating {self.name}({id(self)})!')
+        # self.dlog(f'Creating {self.name}({id(self)})!')
+
+    @property
+    def name(self):
+        return self.spec.name
+
+    @property
+    def ignore_reason(self):
+        return self.spec.ignore_reason
 
     def fetch_imports(self):
-        self.dlog("fetch_imports", f"({self.path})")
-        if self.error:
-            self.wlog("fetch_imports", f'\t-Skipping imports for {self.name} because of error: "{self.error}".')
+        log = self.logger("fetch_imports")
+        log.d(f"{self.path}")
+
+        if self.ignore_reason:
+            log.d(f'-Ignoring {self.name}: "{self.ignore_reason}".')
             return
 
         if not self.path:
-            self.wlog("fetch_imports", f'\t-Skipping imports for {self.name} path is none.')
+            log.d(f'-Skipping imports for {self.name} path is none.')
             return
 
-        print(f'{self} - {self.path}({type(self.path)})')
-        with open(self.path, "rt") as file:
-            st: ast.AST = ast.parse(file.read(), filename=self.path)
-            wrap = ASTWrapper(st)
-            self.imports = wrap.imports_for_symbol()
-            self.dlog("fetch_imports", "->[\n\t{}\n\t]".format(
-                '\n\t'.join([str(i) for i in self.imports])
-            ))
+        wrap = ast_wrapper_for_file(self.path)
+        self.imports = wrap.imports_for_symbol()
+        log.d("->[\n\t{}\n\t]".format(
+            '\n\t'.join([str(i) for i in self.imports])
+        ))
 
 
     @property
@@ -97,12 +124,12 @@ class ModuleListingWrapper(Logger):
     @property
     def decendant_count(self):
         count = len(self.children)
-        for c in self.children:
-            try:
-                count += c.decendant_count
-            except RecursionError as re:
-                print(f'decendant_count:{self.name}[{self.path}] - Recursion error on child: {c.name}[{c.path}]!')
-                raise
+        # for c in self.children:
+        #     try:
+        #         count += c.decendant_count
+        #     except RecursionError as re:
+        #         print(f'decendant_count:{self.name}[{self.path}] - Recursion error on child: {c.name}[{c.path}]!')
+        #         raise
 
         return count
 
@@ -118,12 +145,13 @@ class ModuleListingWrapper(Logger):
 
     def get_children(self):
         # gets a flattened list
+        log = self.logger("get_children")
         children = set(self.children)
         for c in self.children:
             try:
                 children.update(c.get_children())
             except RecursionError as re:
-                print(f'get_children:{self.short_str()} - Recursion error on child: {c.short_str()}!')
+                log.e(f'{self.short_str()} - Recursion error on child: {c.short_str()}!')
                 raise
 
         return children
@@ -146,6 +174,8 @@ class ModuleListingWrapper(Logger):
 
     def _str_comps(self, short=False):
         path = self.path or 'X'
+        if self.ignore_reason:
+            path = self.ignore_reason
         imports = ''
         import_by = ''
         impl = ''
@@ -221,6 +251,7 @@ class ModuleCrawler(Logger):
         self.paths_checked: Set[str] = set()
         self.modules_checked: Set[str] = set()
         self.next_paths: Set[str] = {target}
+        self.has_results = False
 
     @property
     def done(self):
@@ -243,7 +274,7 @@ class ModuleCrawler(Logger):
             highest = sorted(mods, reverse=True, key=lambda x: x.decendant_count)[0]
             to_remove = highest.get_children()
             if not highest.temporary:
-                print("Root:")
+                # print("Root:")
                 highest.print_children()
 
             # gotta add the one we just printed
@@ -251,55 +282,38 @@ class ModuleCrawler(Logger):
             mods = mods - to_remove
 
     def _call_findimports(self, target):
-        dlog = self.gen_dlog('_call_findimports')
+        log = self.logger("_call_findimports")
 
-        dlog(f"Calling find_imports on {target}")
+        log.v(f"Calling find_imports on {target}")
 
         result = {}
         key = None
 
         if target in self.path_map:
             item = self.path_map[target]
+            log.v(f"Found previously existing object: {item}")
             key = item.name
             if not item.imports:
                 item.fetch_imports()
 
             result[key] = item
         else:
+            log.v(f"Using module graph")
             mg = ModuleGraph()
             mg.parseFile(target)
-
 
             key = next(iter(mg.modules.keys()))
             base_module = mg.modules[key]
 
-            module_info = {
-                'name': base_module.modname,
-                # base_module.imports should include the proper list, but it doesn't - it includes absolutes
-                # https://stackoverflow.com/questions/952914/how-to-make-a-flat-list-out-of-list-of-lists
-                # this is actually 99% impossible to read but it is proper python lol
-                # for i in imps, for each name in i.names, add name to list
-                # 'imports': [name for i in imps for name in i.names],
-                'error': None,
-                'path': target,
-                'imported_by': []
-            }
-            result[key] = ModuleListingWrapper(module_info)
+            spec = FakeSpec(base_module.modname, target)
+            result[key] = ModuleListingWrapper(spec)
             result[key].fetch_imports()
 
         for i in result[key].imports:
-            print(i)
             for full_path, spec in i.specs.items():
 
-                # this will be
-                imp_mod_info = {
-                    'impored_by': [],
-                    'error': spec.error,
-                    'name': spec.name,
-                    'path': spec.origin or None
-                }
                 if spec.name not in result:
-                    result[spec.name] = ModuleListingWrapper(imp_mod_info)
+                    result[spec.name] = ModuleListingWrapper(spec)
                     result[spec.name].fetch_imports()
 
         return {
@@ -308,8 +322,8 @@ class ModuleCrawler(Logger):
         }
 
     def _generate_modules_for_target(self, target):
-        dlog = self.gen_dlog('_gen_mods_for_n_target')
-        wlog = self.gen_wlog('_gen_mods_for_n_target')
+        log = self.logger("_gen_mods_for_n_target")
+        log.v(f"{target}")
 
         # target = self.next_paths.pop()
 
@@ -333,14 +347,14 @@ class ModuleCrawler(Logger):
                     secondary requirements to the file list after we scan the first file, but we need to update the module
                     map and also update any existing chilren!
                     '''
-                    wlog(f"\tUpdating {self.module_map[key].short_str()} -> {w.short_str()}")
+                    log.w(f"Updating {self.module_map[key].short_str()} -> {w.short_str()}")
                     self.module_map[key] = w
                     for v in self.module_map.values():
                         v.update_children(w)
                 else:
-                    wlog(f"\tNot saving <{w.short_str()}>")
+                    log.w(f"Not saving <{w.short_str()}>")
             else:
-                dlog(f"\tAdding '{key}' to module_map")
+                log.d(f"Adding '{key}' to module_map")
                 self.module_map[key] = w
                 if w.path:
                     self.path_map[w.path] = w
@@ -348,8 +362,8 @@ class ModuleCrawler(Logger):
         return raw_modules['root']
 
     def _check_modules_for_one_target(self, target):
-        dlog = self.gen_dlog('_call_py2dep')
-        wlog = self.gen_wlog('_call_py2dep')
+        log = self.logger("_check_modules_for_one_target")
+        log.v(f"{target}")
 
         modules_checked = set()
         # modules = {self._ROOT_MODULE}  # generally a stub file created by py2dep
@@ -358,21 +372,21 @@ class ModuleCrawler(Logger):
 
         # don't repeat these either
         modules_checked.add(current_module.name)
-        if current_module.error:
-            wlog(f'Skipping <{current_module.name}>: {current_module.error}')
+        if current_module.ignore_reason:
+            log.w(f'Skipping <{current_module.name}>: {current_module.ignore_reason}')
         else:
-            wlog(f'Checking <{current_module.name}>')
+            log.d(f'Checking <{current_module.name}>')
 
             # remember to itterate over names here
             for imp in current_module.import_names:
                 if imp not in self.module_map:
-                    wlog(f'\tModule "{imp}" not found in module map!')
+                    log.w(f'\tModule "{imp}" not found in module map!')
                     continue
                 import_module = self.module_map[imp]
 
 
-                if import_module.error:
-                    wlog(f'\t-Not checking <{import_module.name}> - Error: {import_module.error}')
+                if import_module.ignore_reason:
+                    log.w(f'\t-Ignoring <{import_module.name}>: {import_module.ignore_reason}')
                     continue
                 # don't inspect the imports of implicit modules
 
@@ -383,43 +397,43 @@ class ModuleCrawler(Logger):
                         # modules.add(import_module.name)
                         # otherwise
                         if not current_module.temporary:
-                            wlog(f'\t\t+Adding {import_module.short_str()} to children of {current_module.short_str()}')
+                            log.d(f'\t\t+Adding {import_module.short_str()} to children of {current_module.short_str()}')
                             current_module.children.append(import_module)
                     else:
-                        wlog(f'\t-Not checking imports of <{import_module.name}> - Implicit')
+                        log.d(f'\t-Not checking imports of <{import_module.name}> - Implicit')
                 else:
-                    wlog(f'\t-Not checking imports of <{import_module.name}> - Already checked')
+                    log.d(f'\t-Not checking imports of <{import_module.name}> - Already checked')
 
 
                 if import_module.path and import_module.path.python_file and\
                         import_module.path not in self.paths_checked:
                     # don't double-check paths
                     if not import_module.implicit:
-                        wlog(f'\t++Adding [{import_module.path}] to [FILES]')
+                        log.d(f'\t++Adding [{import_module.path}] to [FILES]')
                         self.next_paths.add(import_module.path)
                     else:
-                        wlog(f'\t--Not adding [{import_module.path}] to [FILES]: Implicit import')
+                        log.d(f'\t--Not adding [{import_module.path}] to [FILES]: Implicit import')
                 else:
                     reason = 'Already crawled'
                     if import_module.path is None:
                         reason = f'Path is None: {import_module}'
                     elif not import_module.path.python_file:
                         reason =f'Not a python file: {import_module}'
-                    wlog(f'\t--Not adding [{import_module.path}] to [FILES]: {reason}')
+                    log.d(f'\t--Not adding [{import_module.path}] to [FILES]: {reason}')
 
 
-        wlog(f'Round Complete!')
-        wlog(f'\tProcessed: {current_module}')
+        log.d(f'Round Complete!')
+        log.d(f'\tProcessed: {current_module}')
         # wlog(f'\t<modules>:{modules}')
         formatted_paths = ""
         # print(self.next_paths)
         if self.next_paths:
             formatted_paths = "\n\t".join([p for p in self.next_paths])
-        wlog(f'\t[FILES]:{formatted_paths}')
+        log.d(f'\t[FILES]:{formatted_paths}')
         all_modules = ""
         if self.module_map:
             all_modules ="[\n\t\t" +  "\n\t\t".join([f"{v.short_str()}" for v in self.module_map.values()]) +"\n]"
-        wlog(f'\tAll Modules: {all_modules}')
+        log.d(f'\tAll Modules: {all_modules}')
 
     def _cleanup(self):
         base = getcwd()

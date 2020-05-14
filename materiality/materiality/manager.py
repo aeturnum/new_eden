@@ -32,41 +32,11 @@ class DependencyFinder(Logger):
                     # author.add_change(change)
 
     def crawl_file_modules(self, file_name):
-        # print(path)
-        # print(find_module("gluon", path))
-        # print(find_spec("gluon.widget"))
-
         mc = ModuleCrawler(join(self.base, file_name))
         # mc.step()
         while not mc.done:
             mc.step()
-        #
-        # mc.find_roots()
-        # mc.step()
-        # mc.step()
-        # mc.step()
-        # print(mc.results)
-        # # mf = ModuleFinder()
-        # p = join(self.base, file_name)
-        # t = Target(join(self.base, file_name))
-        # # args = pydeps.cli.parse_args([p, '--no-config', '--noshow', '--include-missing'])
-        # # need to include both '--pylib-all', '--pylib' to get python libs
-        # args = pydeps.cli.parse_args([p, '--no-config', '--noshow', '--pylib-all', '--pylib'])
-        # args.pop('fname')
-        # # print(args)
-        # # args.update({})
-        # print(py2dep(t, **args))
-        # print(t.workdir)
-        # print(getcwd())
-        # print(listdir(getcwd()))
-        # # mf.run_script()
-        # # module_names = {k:"" for k in mf.modules["__main__"].globalnames.keys()}
-        # # print(module_names)
-        # # for path, mod in mf.modules.items():
-        # #     if path == "__main__":
-        # #         print(f'{path}: {", ".join([gn for gn in mod.globalnames.keys()])}')
-        #     # import pudb.b
-        # # mf.report()
+
 
     def crawl_repo(self):
         for commit in RepositoryMining(self.base).traverse_commits():
