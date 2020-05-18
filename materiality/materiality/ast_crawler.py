@@ -11,25 +11,49 @@ from .utils import Logger
 _Common_Exception = "find_spec raised a"
 
 
-class SpecWrapper(Logger):
+class ImportReference(Logger):
+    """
+    Helper object to track what an import refers _to_ - which module (and what file),
+    which symbols in that module. Not tied to a particular file - a given Import X statement
+    is the same as any other.
+    """
 
     _NAME = "SpecWrapper"
 
     # normal errors
     NOT_FOUND = "Module Not Found"
     SYSTEM_LIBRARY = "System Module"
+    RELATIVE = "Relative Import"
     # exceptions
     EXCEPTION = _Common_Exception
     ATTRIBUTE_EXCEPTION = f"{_Common_Exception}n AttributeError"
     MODULE_NOT_FOUND_EXCEPTION = f"{_Common_Exception}ModuleNotFoumdError"
     VALUE_EXCEPTION = f'{_Common_Exception}ValueError'
 
-    def __init__(self, name, **kwargs):
+    def __init__(self, module: str, symbols: List[str] = None, level : int = None, **kwargs):
         super().__init__(**kwargs)
-        self.name = name
-        self.members = None
+        self.module = module
+        self.symbols = symbols
         self.spec = None
         self.ignore_reason = None
+        self.level = level
+
+
+        log = self.logger("__init__")
+        log.d(f"({module}, {symbols})")
+        if self.level:
+            """
+            Proper handling of this will need the file tracker. What we need to do is this:
+                - Get the path of the file that a relative import is declared within
+                - Get the directory and search for python file(s) [.py, .pyc] with the right names
+                    - i.e. in File <path>/a.py 
+                        * From . import b, c ->
+                            * look for <path>/b.py || <path>/b.pyc
+                            * look for <path>/c.py || <path>/c.pyc
+                - Supply the found files through self.spec
+            """
+            self.ignore_reason = self.RELATIVE
+            log.e(f'{self} - HANDLE RELATIVE IMPORTS')
 
         self._resolve_spec()
 
@@ -38,7 +62,7 @@ class SpecWrapper(Logger):
         log.v(f"{name}")
 
         if self.ignore_reason:
-            log.d(f'Ignoring Module "{name}", not finding spec')
+            log.d(f'Module "{name}" being ignored, not finding spec')
             return name, None
 
         spec = None
@@ -74,67 +98,112 @@ class SpecWrapper(Logger):
     def _resolve_spec(self):
         log = self.logger("_find_spec")
         log.v(f"")
-        (found_name, spec) = self._find_spec(self.name)
+        (found_name, spec) = self._find_spec(self.module)
 
         if spec:
             # dlog(f'Checking if spec is system spec: {spec}')
             if spec.origin and 'site-packages' not in spec.origin:
                 # builtin case 1
-                log.d(f'Module "{self.name}" is not in sitepackages, it is a builtin.')
+                log.d(f'Module "{self.module}" is not in sitepackages, it is a builtin.')
                 self.ignore_reason = self.SYSTEM_LIBRARY
             elif spec.loader and spec.loader is BuiltinImporter:
                 # builtin case 2
-                log.d(f'Module "{self.name}" uses the buildin importer.')
+                log.d(f'Module "{self.module}" uses the buildin importer.')
                 self.ignore_reason = self.SYSTEM_LIBRARY
 
-            # we're importing a submodule
-            if found_name != self.name:
-                members = self.name
-                members = members.replace(found_name, "")
+            # we're importing a submodule we didn't expect
+            if found_name != self.module:
+                symbols = self.module
+                symbols = symbols.replace(found_name, "").strip(".")
 
-                self.members = members.strip(".")
+                if not self.symbols:
+                    # easy case
+                    self.symbols = [symbols]
+                else:
+                    # raise Exception(
+                    #     "{} {}".format(
+                    #         "Need to figure out how to merge already existing members with newly discovered path!",
+                    #         f"{self.module}.{self.symbols} -> {found_name}.{symbols}|{self.symbols}"
+                    #     )
+                    # )
+                    self.symbols = [f'{symbols}.{old_symbol}' for old_symbol in self.symbols]
 
-                log.v(f'{self.name} -> {found_name}; {self.members}')
-                self.name = found_name
+                log.v(f'{self.module} -> {found_name}; {self.symbols}')
+                self.module = found_name
 
             self.spec = spec
         else:
-            log.w(f'Module {self.name} does not appear to be installed in current path.')
+            log.w(f'Module "{self.module}" does not appear to be installed in current path.')
 
+    # @property
+    # def full_module(self):
+    #     return self.spec and self.symbols is None
+
+    # just in case
     @property
-    def full_module(self):
-        return self.spec and self.members is None
+    def name(self):
+        return self.module
 
     @property
     def origin(self):
         return getattr(self.spec, "origin", None)
 
     @property
-    def is_error(self):
+    def being_ignored(self):
         return self.ignore_reason != None
 
+    @property
+    def name_str(self):
+        if not self.symbols:
+            return f'{self._badge}{self.module}'
+        else:
+            # should always be singular
+            return f'{self._badge}From {self.module} Import {",".join(self.symbols)}'
+
+    @property
+    def _badge(self):
+        if self.being_ignored:
+            if self.ignore_reason == self.NOT_FOUND:
+                return '<X>'
+            if self.ignore_reason == self.SYSTEM_LIBRARY:
+                return '<S>'
+            if self.ignore_reason in [self.ATTRIBUTE_EXCEPTION, self.MODULE_NOT_FOUND_EXCEPTION, self.VALUE_EXCEPTION]:
+                return '<E>'
+            if self.ignore_reason == self.RELATIVE:
+                return '<!R!>'
+
+        return '<V>'
+
     def __str__(self):
-        base = f'{self.name}|'
-        if self.is_error:
-            return f'{base}Err[{self.ignore_reason}]'
-        return f'{base} {self.spec}'
+        spec_or_ignore = f"->[{self.spec}]"
+        # if self.being_ignored:
+        #     spec_or_ignore = f'|{self.ignore_reason}'
+
+        if not self.symbols:
+            # can appear as multiples
+            return f'{self._badge}Import {self.module}{spec_or_ignore}'
+        else:
+            mod_str = self.module
+            if not self.module:
+                mod_str = ''
+            return '{}From {}{} Import {}{}'.format(
+                self._badge,
+                self.level * ".",
+                mod_str,
+                ', '.join(self.symbols),
+                spec_or_ignore
+            )
 
     def __repr__(self):
         return str(self)
-
-
-class PrintCtx(object):
-    ctx_obj: str = None
-    in_statement: bool = False
-    line_number: Optional[int] = None
 
 
 # todo: Make a 2nd Import helper object that wraps the _act_ of importing a library
 # todo: instead of the Import <x> statement in the AST. One Import statement can generate
 # todo: many import actions (from X import a, b, c, d). This is why I've been keeping track of
 # todo: imports seperately, because each a, b, c, d have different line# and import implications.
-class ImportContext(Logger):
-    """ Helper object to track where an import comes from and get info about it """
+class ImportStatement(Logger):
+    """ Helper object to track where a particular import statement in a particular file """
 
     # AST definitions we care about:
     # | Import(alias* names)
@@ -164,63 +233,104 @@ class ImportContext(Logger):
 
         self._parent = parent_wrapper
         self._node = node
-        self._src = src
+        self._context = src
+        self.references: List[ImportReference] = None
+
+        self._make_reference()
+
+    def _make_reference(self):
+        try:
+            if self.is_import:
+                self.references = [ImportReference(alias.name) for alias in self._node.names]
+            else:
+                # if self._node.module is None:
+                #     raise Exception("Don't know how to handle: ImportFrom({}, {}, {})".format(
+                #         self._node.module,
+                #         self._node.names,
+                #         self._node.level
+                #     ))
+                self.references = [
+                    ImportReference(
+                        self._node.module,
+                        [alias.name for alias in self._node.names],
+                        self._node.level
+                    )
+                ]
+        except:
+            print(self._node.lineno)
+            raise
 
     def re_contextualize(self, new_source):
         # print(f'ImportContex.re_contextualize({new_source})')
         c = copy(self)
-        c._src = new_source
+        c._context = new_source
         return c
 
     @property
-    def is_imp(self):
+    def is_import(self):
         return self._node.__class__ is ast.Import
 
     # def is_imp_frm(self):
     #     return self._node.__class__ is ast.ImportFrom
 
-    @property
-    def names(self) -> List[str]:
-        # full names, may or may not be modules
-        if self.is_imp:
-            return [name.name for name in self._node.names]
-
-        module_str = ''
-        if hasattr(self._node, 'module'):
-            module_str = f'{self._node.module}.'
-
-        return [module_str + name.name for name in self._node.names]
-
-    @property
-    def module(self):
-        if self.is_imp:
-            return self.names
-
-        return self._node.module
+    # @property
+    # def names(self) -> List[str]:
+    #     # full names, may or may not be modules
+    #     if self.is_imp:
+    #         return [name.name for name in self._node.names]
+    #
+    #     module_str = ''
+    #     if hasattr(self._node, 'module'):
+    #         module_str = f'{self._node.module}.'
+    #
+    #     return [module_str + name.name for name in self._node.names]
+    #
+    # @property
+    # def module(self):
+    #     if self.is_imp:
+    #         return self.names
+    #
+    #     return self._node.module
 
     @property
     def local(self):
-        return self._src == self.Source_Local
+        return self._context == self.Source_Local
 
-    @property
-    def specs(self) -> Dict[str, SpecWrapper]:
-        specs = {}
-        for name in self.names:
-            spec = SpecWrapper(name)
-            # print(spec)
-            specs[name] = spec
-
-        return specs
+    # @property
+    # def specs(self) -> Dict[str, ImportReference]:
+    #     specs = {}
+    #     for name in self.names:
+    #         spec = ImportReference(name)
+    #         # print(spec)
+    #         specs[name] = spec
+    #
+    #     return specs
 
     def str_with_scope(self):
         return str(self) + f" <- {self._parent}"
 
     def __str__(self):
         # return f'[{self._node.lineno}|{self._src}]Import {", ".join(self.names)}'
-        return f'[{self._node.lineno}]Import {", ".join(self.names)}'
+        if self.is_import:
+            return f'[{self._node.lineno}]Import {", ".join([r.name_str for r in self.references])}'
+        else:
+            return f'[{self._node.lineno}]{self.references[0]}'
 
     def __repr__(self):
         return str(self)
+
+
+class PrintCtx(object):
+    ctx_obj: str = None
+    in_statement: bool = False
+    line_number: Optional[int] = None
+
+class IgnoreSymbolException(Exception):
+    """
+    Thrown when we believe we can safely ignore this symbol and not store it in the table
+    """
+    def __init__(self, message = None):
+        self.message = message
 
 
 class ASTWrapper(Logger):
@@ -306,7 +416,7 @@ class ASTWrapper(Logger):
         self.parent = parent
         self.log_node = log_node
         self.children = []
-        self._imports: List[ImportContext] = []
+        self._imports: List[ImportStatement] = []
         self._local_imports = False
         self._first_line = 0
         self._last_line = 0
@@ -355,7 +465,11 @@ class ASTWrapper(Logger):
         # self.wlog('_i_:node_adds_symbol', f'{self}({symbol_member})')
         if self._n_class in self._SYMBOL_BY_EXPR:
             # Symbol is contained in an expression, that must be resolved first
-            symbol_names = self._resolve_expr_symbols(symbol_member)
+            try:
+                symbol_names = self._resolve_expr_symbols(symbol_member)
+            except IgnoreSymbolException as e:
+                log.w(f'{e.message}')
+                symbol_names = []
         else:
             # symbol is contained in an id, which is just a string, so we already have it in symbol_member
             symbol_names = [symbol_member]  # makes the processing easier if it's always a list
@@ -427,8 +541,13 @@ class ASTWrapper(Logger):
                 # | Attribute(expr value, identifier attr, expr_context ctx)
                 # this expects a list
                 value_strings = self._resolve_expr_symbols(e.value)
+                # [2493]{table_user}{passfield}.{requires}[-= #1].{min_length} = #0
+                # ->
+                # table_user[passfield].requires[-1].min_length
+                # expected to have value of
                 if not isinstance(value_strings, list) or len(value_strings) != 1:
-                    raise Exception(f"This is an unexpected format: {value_strings}")
+                    log.e(f"value: {self.node_str(e.value)}, id: {e.attr}")
+                    raise Exception(f"{self}:This is an unexpected format: {value_strings}")
                 out.append(f'{value_strings[0]}.{e.attr}')
             elif isinstance(e, ast.Tuple):
                 # | Tuple(expr* elts, expr_context ctx)
@@ -438,7 +557,7 @@ class ASTWrapper(Logger):
             elif isinstance(e, ast.Subscript):
                 # | Subscript(expr value, slice slice, expr_context ctx)
                 # This will always be adding a symbol to something that's already in our symbol table and I think we can safely ignore it
-                pass
+                raise IgnoreSymbolException(f'Found {self.node_str(e)} when resolving symbols in {self} - abandoning symbol resolution.')
             else:
                 log.w(f'\tExpr({e})({self.node_str(e)}) does not seem to generate a symbol, skipping')
                 continue
@@ -493,16 +612,18 @@ class ASTWrapper(Logger):
             self._symbols[name] = last_value
 
     def _make_child_wrapper(self, element):
+        log = self.logger("_make_child_wrapper")
         wrapper = ASTWrapper(element, self, log_node = self.log_node)
-        if ImportContext.node_is_import(element):
+        if ImportStatement.node_is_import(element):
             # new import in "our" context
             self._local_imports = True
-            self._imports.append(ImportContext(element, self, ImportContext.Source_Local))
+            log.d(f"Making import: {self.node_str(element)}")
+            self._imports.append(ImportStatement(element, self, ImportStatement.Source_Local))
 
         return wrapper
 
     def _get_scope_imports(self):
-        return [i.re_contextualize(ImportContext.Source_Above) for i in self._imports]
+        return [i.re_contextualize(ImportStatement.Source_Above) for i in self._imports]
 
     @property
     def has_symbols(self):
@@ -539,7 +660,7 @@ class ASTWrapper(Logger):
     def interesting_children(self):
         return list(filter(lambda x: x.interesting, self.children))
 
-    def imports_for_symbol(self, symbol_name: str = None) -> List[ImportContext]:
+    def imports_for_symbol(self, symbol_name: str = None) -> List[ImportStatement]:
         symbol = self
         if symbol_name:
             symbol = self._symbols.get(symbol_name, None)
@@ -754,9 +875,15 @@ class ASTWrapper(Logger):
             # | ImportFrom(identifier? module, alias* names, int? level)
             names = [self._unwrap_alias(n) for n in node.names]
             mod = getattr(node, 'module', "Unknown")
+            level = getattr(node, 'level', None)
             (line_str, ctx) = self._line_number_str(node, ctx)
-
-            return f'{line_str}From {mod} import {", ".join(names)}'
+            if not mod and level:
+                # relative import
+                return f'{line_str}From {"." * level} import {", ".join(names)}'
+            elif mod and level:
+                return f'{line_str}From {"." * level}{mod} import {", ".join(names)}'
+            else:
+                return f'{line_str}From {mod} import {", ".join(names)}'
         elif isinstance(node, ast.For):
             # | For(expr target, expr iter, stmt* body, stmt* orelse)
             (line_str, ctx) = self._line_number_str(node, ctx)
@@ -1095,5 +1222,27 @@ class ASTWrapper(Logger):
         return self.node_str(self.node)
 
 def ast_wrapper_for_file(path):
-    with open(path, "rt") as file:
-        return ASTWrapper(ast.parse(file.read(), filename=path))
+    file = open(path, "rt")
+    first_line = file.readline()
+    # https://stackoverflow.com/questions/17912307/u-ufeff-in-python-string
+    # todo: maybe do this better?
+    if "-*- coding: utf-8 -*-" in first_line: # this isn't efficient but it's ok
+        file.close()
+        # todo: figure out how to detect uft-8 v.s. utf-8-sig
+        new_encoding = 'utf-8'
+        if ord(first_line[0]) == 65279: # \ufeff
+            new_encoding = 'utf-8-sig'
+            
+        # print(f'first character: "{first_line[0]}"({ord(first_line[0])})')
+        file = open(path, mode='rt', encoding=new_encoding)
+        # print(f"Found utf-8 encoding! Re-opening file!: {file}")
+        # new contents
+    else:
+        # reset position
+        file.seek(0)
+
+
+    file_contents = file.read()
+    file.close()
+
+    return ASTWrapper(ast.parse(file_contents, filename=path))

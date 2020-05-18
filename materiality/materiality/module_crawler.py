@@ -3,7 +3,7 @@ from os.path import join, splitext
 from typing import Mapping, Set, List, Optional, Dict, Any
 
 from .utils import Logger
-from .ast_crawler import ImportContext, ASTWrapper, SpecWrapper, ast_wrapper_for_file
+from .ast_crawler import ImportStatement, ASTWrapper, ImportReference, ast_wrapper_for_file
 from findimports import find_imports, ImportInfo, ModuleGraph
 
 class PathWrapper(str):
@@ -12,10 +12,10 @@ class PathWrapper(str):
     def python_file(self):
         return splitext(self)[1] in ['.py', '.pyc']
 
-class FakeSpec(SpecWrapper):
-    def __init__(self, name: str, path: str, **kwargs):
-        super().__init__(name, **kwargs)
-        self.name = name
+class FakeSpec(ImportReference):
+    def __init__(self, module: str, path: str, **kwargs):
+        super().__init__(module, **kwargs)
+        self.module = module
         self._path = path
 
     def _resolve_spec(self):
@@ -43,25 +43,25 @@ class ModuleListingWrapper(Logger):
     """
     _NAME = 'ModuleListingWrapper'
 
-    def __init__(self, spec, **kwargs):
+    def __init__(self, import_ref, **kwargs):
         super().__init__(**kwargs)
         log = self.logger("__init__")
 
         # strings
-        self.imports: List[ImportContext] = []
+        self.imports: List[ImportStatement] = []
         # strings
         self.imported_by: List[str] = []
-        self.spec: SpecWrapper = spec
+        self.spec: ImportReference = import_ref
         # self.name: str = value_dict.get('name')
         # self.ignore_reason: str = value_dict.get('ignore_reason', None)
         self.path = None
 
-        path = spec.origin
+        path = import_ref.origin
         if path == "built-in":
             path = None
 
         if path is None and not self.ignore_reason:
-            log.e(f'Path is None! args:{spec}')
+            log.e(f'Path is None! args:{import_ref}')
 
         # if self.error is not None:
         #     self.wlog(f'{self.name}[ERROR] -> {self.error}')
@@ -88,7 +88,7 @@ class ModuleListingWrapper(Logger):
 
     @property
     def name(self):
-        return self.spec.name
+        return self.spec.module
 
     @property
     def ignore_reason(self):
@@ -115,7 +115,7 @@ class ModuleListingWrapper(Logger):
 
     @property
     def import_names(self):
-        return [name for i in self.imports for name in i.names]
+        return [ref.module for i in self.imports for ref in i.references]
 
     @property
     def is_imported(self):
@@ -310,11 +310,11 @@ class ModuleCrawler(Logger):
             result[key].fetch_imports()
 
         for i in result[key].imports:
-            for full_path, spec in i.specs.items():
+            for import_ref in i.references:
 
-                if spec.name not in result:
-                    result[spec.name] = ModuleListingWrapper(spec)
-                    result[spec.name].fetch_imports()
+                if import_ref.name not in result:
+                    result[import_ref.name] = ModuleListingWrapper(import_ref)
+                    result[import_ref.name].fetch_imports()
 
         return {
             'root': {key},

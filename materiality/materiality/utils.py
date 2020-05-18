@@ -66,7 +66,7 @@ class LogContext:
         global log
         tab = ''
         if self.call_count > 0:
-            tab = '\t'
+            tab = '  '
         log(
             LEVELS[level],
             self._construct_log_string(),
