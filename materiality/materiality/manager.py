@@ -34,8 +34,13 @@ class DependencyFinder(Logger):
     def crawl_file_modules(self, file_name):
         mc = ModuleCrawler(join(self.base, file_name))
         # mc.step()
+        # mc.step()
+        # mc.step()
+        # mc.step()
+
         while not mc.done:
             mc.step()
+
 
 
     def crawl_repo(self):

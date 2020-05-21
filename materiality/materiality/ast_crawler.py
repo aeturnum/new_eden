@@ -3,10 +3,11 @@ import ast
 from importlib.util import find_spec
 from importlib.machinery import BuiltinImporter
 from copy import deepcopy, copy
-from typing import Mapping, Set, List, Optional, Dict, Any
+from typing import Set, List, Optional, Dict, Any
 from itertools import chain
+from os.path import basename
 
-from .utils import Logger
+from .utils import Logger, PythonPathWrapper
 
 _Common_Exception = "find_spec raised a"
 
@@ -18,7 +19,7 @@ class ImportReference(Logger):
     is the same as any other.
     """
 
-    _NAME = "SpecWrapper"
+    _NAME = "ImportReference"
 
     # normal errors
     NOT_FOUND = "Module Not Found"
@@ -30,47 +31,40 @@ class ImportReference(Logger):
     MODULE_NOT_FOUND_EXCEPTION = f"{_Common_Exception}ModuleNotFoumdError"
     VALUE_EXCEPTION = f'{_Common_Exception}ValueError'
 
-    def __init__(self, module: str, symbols: List[str] = None, level : int = None, **kwargs):
+    def __init__(self, statement_file_path : str, module : str, symbols : List[str] = None, level : int = 0, **kwargs):
         super().__init__(**kwargs)
+
+        self.statement_file_path = statement_file_path
         self.module = module
         self.symbols = symbols
         self.spec = None
         self.ignore_reason = None
+        self.resolved_path = None
         self.level = level
 
 
         log = self.logger("__init__")
-        log.d(f"({module}, {symbols})")
-        if self.level:
-            """
-            Proper handling of this will need the file tracker. What we need to do is this:
-                - Get the path of the file that a relative import is declared within
-                - Get the directory and search for python file(s) [.py, .pyc] with the right names
-                    - i.e. in File <path>/a.py 
-                        * From . import b, c ->
-                            * look for <path>/b.py || <path>/b.pyc
-                            * look for <path>/c.py || <path>/c.pyc
-                - Supply the found files through self.spec
-            """
-            self.ignore_reason = self.RELATIVE
-            log.e(f'{self} - HANDLE RELATIVE IMPORTS')
+        log.v(f"({module}, {symbols})")
 
         self._resolve_spec()
 
-    def _find_spec(self, name):
+    def _find_spec(self, module_name):
         log = self.logger("_find_spec")
-        log.v(f"{name}")
+        log.v(f"{module_name}")
+        if module_name is None:
+            log.w(F"{self}: name is none, skipping find spec")
+            return module_name, None
 
         if self.ignore_reason:
-            log.d(f'Module "{name}" being ignored, not finding spec')
-            return name, None
+            log.d(f'Module "{module_name}" being ignored, not finding spec')
+            return module_name, None
 
         spec = None
         exception = None
         ignore_reason = None
 
         try:
-            spec = find_spec(name)
+            spec = find_spec(module_name)
             # clear previous errors on success
         except AttributeError as e:  # __future__ crashes find_spec lol
             ignore_reason = self.ATTRIBUTE_EXCEPTION
@@ -82,10 +76,10 @@ class ImportReference(Logger):
             ignore_reason = self.VALUE_EXCEPTION
             exception = e
 
-        if spec is None and '.' in name:
+        if spec is None and '.' in module_name:
             # might be a X from Y situation rendered as X.Y, remove a dot and try that as the module
-            (maybe_module, new_member) = name.rsplit('.', 1)
-            log.d(f'Module "{name}" can\'t be found, trying {maybe_module}')
+            (maybe_module, new_member) = module_name.rsplit('.', 1)
+            log.d(f'Module "{module_name}" can\'t be found, trying {maybe_module}')
 
             return self._find_spec(maybe_module)
 
@@ -93,7 +87,7 @@ class ImportReference(Logger):
             self.ignore_reason = ignore_reason
             log.d(f'name "{self}" raised: {exception}')
 
-        return name, spec
+        return module_name, spec
 
     def _resolve_spec(self):
         log = self.logger("_find_spec")
@@ -120,12 +114,6 @@ class ImportReference(Logger):
                     # easy case
                     self.symbols = [symbols]
                 else:
-                    # raise Exception(
-                    #     "{} {}".format(
-                    #         "Need to figure out how to merge already existing members with newly discovered path!",
-                    #         f"{self.module}.{self.symbols} -> {found_name}.{symbols}|{self.symbols}"
-                    #     )
-                    # )
                     self.symbols = [f'{symbols}.{old_symbol}' for old_symbol in self.symbols]
 
                 log.v(f'{self.module} -> {found_name}; {self.symbols}')
@@ -135,9 +123,18 @@ class ImportReference(Logger):
         else:
             log.w(f'Module "{self.module}" does not appear to be installed in current path.')
 
-    # @property
-    # def full_module(self):
-    #     return self.spec and self.symbols is None
+    def resolve(self, new_path: PythonPathWrapper = None):
+        log = self.logger("resolve")
+        if new_path is not None:
+            log.d(f"{self}| {self.path} -> {new_path}")
+            self.resolved_path = new_path.str()
+            self.module = new_path.module_guess
+            self._resolve_spec()
+        else:
+            #
+            log.d(f"{self}| Path correct")
+            self.resolved_path = self.path
+
 
     # just in case
     @property
@@ -149,8 +146,24 @@ class ImportReference(Logger):
         return getattr(self.spec, "origin", None)
 
     @property
+    def relative(self):
+        return self.level > 0
+
+    @property
+    def raw_path(self):
+        return self.origin
+
+    @property
+    def needs_resolution(self):
+        return self.resolved_path is None
+
+    @property
+    def path(self):
+        return self.resolved_path or self.raw_path
+
+    @property
     def being_ignored(self):
-        return self.ignore_reason != None
+        return self.ignore_reason is not None
 
     @property
     def name_str(self):
@@ -158,30 +171,43 @@ class ImportReference(Logger):
             return f'{self._badge}{self.module}'
         else:
             # should always be singular
-            return f'{self._badge}From {self.module} Import {",".join(self.symbols)}'
+            return f'From {self._badge}{self.level * "."}{self.module} Import {",".join(self.symbols)}'
 
     @property
     def _badge(self):
         if self.being_ignored:
             if self.ignore_reason == self.NOT_FOUND:
-                return '<X>'
+                return '<!X>'
             if self.ignore_reason == self.SYSTEM_LIBRARY:
-                return '<S>'
+                return '<!S>'
             if self.ignore_reason in [self.ATTRIBUTE_EXCEPTION, self.MODULE_NOT_FOUND_EXCEPTION, self.VALUE_EXCEPTION]:
-                return '<E>'
-            if self.ignore_reason == self.RELATIVE:
-                return '<!R!>'
+                return '<!E>'
 
-        return '<V>'
+        if self.needs_resolution:
+            return '<!U>'
+
+        if self.relative:
+            return '<+R>'
+        else:
+           return '<+A>'
+
+    @property
+    def _spec_str(self):
+        origin = "None"
+        if self.spec and self.spec.origin:
+            origin = PythonPathWrapper(self.spec.origin).short_version
+
+        if self.spec:
+            return f'-> S[{self.spec.name}]<{origin}>'
+        elif self.needs_resolution:
+            return '-> [Needs Resolution]'
+        else:
+            return '-> [Spec Not Found]'
 
     def __str__(self):
-        spec_or_ignore = f"->[{self.spec}]"
-        # if self.being_ignored:
-        #     spec_or_ignore = f'|{self.ignore_reason}'
-
         if not self.symbols:
             # can appear as multiples
-            return f'{self._badge}Import {self.module}{spec_or_ignore}'
+            return f'{self._badge}Import {self.module}{self._spec_str}'
         else:
             mod_str = self.module
             if not self.module:
@@ -191,7 +217,7 @@ class ImportReference(Logger):
                 self.level * ".",
                 mod_str,
                 ', '.join(self.symbols),
-                spec_or_ignore
+                self._spec_str
             )
 
     def __repr__(self):
@@ -225,13 +251,14 @@ class ImportStatement(Logger):
     def node_is_import(node):
         return node.__class__ in [ast.ImportFrom, ast.Import]
 
-    def __init__(self, node: ast.AST, parent_wrapper, src: str, *kwargs):
+    def __init__(self, node: ast.AST, file_path: str, src: str, *kwargs):
         super().__init__(*kwargs)
         # print(f'ImportContex({node}m {parent_wrapper}, {src})')
         if not self.node_is_import(node):
             raise ValueError(f"ImportContext only supports Import and Import from. Not: {node}")
 
-        self._parent = parent_wrapper
+        # self._parent = parent_wrapper
+        self._file_path = file_path
         self._node = node
         self._context = src
         self.references: List[ImportReference] = None
@@ -241,16 +268,11 @@ class ImportStatement(Logger):
     def _make_reference(self):
         try:
             if self.is_import:
-                self.references = [ImportReference(alias.name) for alias in self._node.names]
+                self.references = [ImportReference(self._file_path, alias.name) for alias in self._node.names]
             else:
-                # if self._node.module is None:
-                #     raise Exception("Don't know how to handle: ImportFrom({}, {}, {})".format(
-                #         self._node.module,
-                #         self._node.names,
-                #         self._node.level
-                #     ))
                 self.references = [
                     ImportReference(
+                        self._file_path,
                         self._node.module,
                         [alias.name for alias in self._node.names],
                         self._node.level
@@ -270,51 +292,16 @@ class ImportStatement(Logger):
     def is_import(self):
         return self._node.__class__ is ast.Import
 
-    # def is_imp_frm(self):
-    #     return self._node.__class__ is ast.ImportFrom
-
-    # @property
-    # def names(self) -> List[str]:
-    #     # full names, may or may not be modules
-    #     if self.is_imp:
-    #         return [name.name for name in self._node.names]
-    #
-    #     module_str = ''
-    #     if hasattr(self._node, 'module'):
-    #         module_str = f'{self._node.module}.'
-    #
-    #     return [module_str + name.name for name in self._node.names]
-    #
-    # @property
-    # def module(self):
-    #     if self.is_imp:
-    #         return self.names
-    #
-    #     return self._node.module
-
     @property
     def local(self):
         return self._context == self.Source_Local
-
-    # @property
-    # def specs(self) -> Dict[str, ImportReference]:
-    #     specs = {}
-    #     for name in self.names:
-    #         spec = ImportReference(name)
-    #         # print(spec)
-    #         specs[name] = spec
-    #
-    #     return specs
-
-    def str_with_scope(self):
-        return str(self) + f" <- {self._parent}"
 
     def __str__(self):
         # return f'[{self._node.lineno}|{self._src}]Import {", ".join(self.names)}'
         if self.is_import:
             return f'[{self._node.lineno}]Import {", ".join([r.name_str for r in self.references])}'
         else:
-            return f'[{self._node.lineno}]{self.references[0]}'
+            return f'[{self._node.lineno}]{self.references[0].name_str}'
 
     def __repr__(self):
         return str(self)
@@ -407,17 +394,16 @@ class ASTWrapper(Logger):
 
     _var_marker = ('{', '}')
 
-    def __init__(self, node: ast.AST, parent: 'ASTWrapper' = None, log_node = False):
+    def __init__(self, path: str, node: ast.AST, parent: 'ASTWrapper' = None, log_node = False):
         super().__init__()
 
         log = self.logger("__init__")
         self.node = node
+        self.path = path
 
         self.parent = parent
         self.log_node = log_node
         self.children = []
-        self._imports: List[ImportStatement] = []
-        self._local_imports = False
         self._first_line = 0
         self._last_line = 0
         self._symbols = {}
@@ -425,7 +411,7 @@ class ASTWrapper(Logger):
             self._first_line = self.line
             self._last_line = self.line
 
-        # log.w(f'{self}')
+        log.v(f'{self}')
         if self.has_children:
             # log.w(f'>has children')
             child_keys = self._NODES_WITH_CHILDREN_TO_KEYS[self._n_class]
@@ -437,188 +423,20 @@ class ASTWrapper(Logger):
                     output = '\n\t' + '\n\t'.join([str(c) for c in self.children])
                     # log.w(f'{self.node.__class__.__name__}[{key}] = {output}')
 
-        self._handle_node_symbol()
+        # self._handle_node_symbol()
 
-        if parent is not None:
+        if self.parent is not None:
+            # keep track of length of each symbol
             if self._has_line:
-                parent._child_line_number(self.node.lineno)
-            if self.children: # get list of scope imports
-                self._imports.extend(parent._get_scope_imports())
+                self.parent._child_line_number(self.node.lineno)
+            # if self.children: # get list of scope imports
+            #     self._imports.extend(self.parent._get_scope_imports())
 
         if self.log_node:
-            log.d("i",f'{self}')
-
-    def _handle_node_symbol(self):
-        log = self.logger("_handle_node_symbol")
-        log.v("")
-        if not self._node_adds_symbol or not self.parent:
-            return
-
-        # find and add symbols to table
-        member_name = self._NODES_THAT_ADD_TO_SYMBOL_TABLE_TO_KEY[self._n_class]
-        symbol_member = getattr(self.node, member_name, None)
-
-        if symbol_member is None:
-            raise ValueError(f"{self}: expected to find a symbol!")
-
-        values = [self._get_r_side_node()]
-        # self.wlog('_i_:node_adds_symbol', f'{self}({symbol_member})')
-        if self._n_class in self._SYMBOL_BY_EXPR:
-            # Symbol is contained in an expression, that must be resolved first
-            try:
-                symbol_names = self._resolve_expr_symbols(symbol_member)
-            except IgnoreSymbolException as e:
-                log.w(f'{e.message}')
-                symbol_names = []
-        else:
-            # symbol is contained in an id, which is just a string, so we already have it in symbol_member
-            symbol_names = [symbol_member]  # makes the processing easier if it's always a list
-
-        if len(symbol_names) > 0:
-            if len(symbol_names) > 1 and len(values) == 1:
-                # try unpacking the values
-                values = self._try_explode_values(values[0])
-
-                if len(symbol_names) > 1 and len(values) == 1:
-                    log.d(f"many symbols to one value! Likely a function unpacking!\n\t\t\t\t{self}")
-            elif len(symbol_names) != len(values):
-                log.w(f"{len(symbol_names)}syms != {len(values)}vals! Symbol table may be flawed!\n\t\t\t\t{self}")
-
-            self.parent._child_adds_symbol(symbol_names, values)
-        # else:
-        #     log.w('_handle_node_symbol', f'Skipping add because we generated no symbols')
-
-    def _get_r_side_node(self):
-        log = self.logger("_get_r_side_node")
-        log.v(f"{self.node}")
-
-
-        # FunctionDef(identifier name, arguments args, stmt* body, expr* decorator_list, expr? returns)
-        # | AsyncFunctionDef(identifier name, arguments args, stmt* body, expr* decorator_list, expr? returns)
-        # | ClassDef(identifier name, expr* bases, keyword* keywords, stmt* body, expr* decorator_list)
-        # | Assign(expr* targets, expr value)
-        # | AugAssign(expr target, operator op, expr value)
-        # | AnnAssign(expr target, expr annotation, expr? value, int simple)
-
-        node = self.node
-        # get the right hand side of the statement
-        if isinstance(node, ast.Assign):
-            node = node.value
-        elif isinstance(node, ast.AugAssign):
-            node = node.value
-        elif isinstance(node, ast.AnnAssign):
-            node = node.value
-
-        return node
-
-    def _try_explode_values(self, node):
-        log = self.logger("_try_explode_values")
-        values = []
-
-        if isinstance(node, ast.Tuple):
-            # | Tuple(expr* elts, expr_context ctx)
-            for expr in node.elts:
-                values.append(expr)
-        else:
-            values.append(node)
-
-        return values
-
-    def _resolve_expr_symbols(self, exprs):
-        log = self.logger("_handle_node_symbol")
-        if not isinstance(exprs, list):
-            exprs = [exprs]
-
-        # log.v(f'Exprs: {", ".join([self.node_str(e) for e in exprs])}')
-        # log.v(f'Exprs: {exprs}')
-        result = []
-        for e in exprs:
-            out = []
-            if isinstance(e, ast.Name):
-                # | Name(identifier id, expr_context ctx)
-                out.append(f'{e.id}')
-            elif isinstance(e, ast.Attribute):
-                # | Attribute(expr value, identifier attr, expr_context ctx)
-                # this expects a list
-                value_strings = self._resolve_expr_symbols(e.value)
-                # [2493]{table_user}{passfield}.{requires}[-= #1].{min_length} = #0
-                # ->
-                # table_user[passfield].requires[-1].min_length
-                # expected to have value of
-                if not isinstance(value_strings, list) or len(value_strings) != 1:
-                    log.e(f"value: {self.node_str(e.value)}, id: {e.attr}")
-                    raise Exception(f"{self}:This is an unexpected format: {value_strings}")
-                out.append(f'{value_strings[0]}.{e.attr}')
-            elif isinstance(e, ast.Tuple):
-                # | Tuple(expr* elts, expr_context ctx)
-                for expr in e.elts:
-                    for identifier in self._resolve_expr_symbols(expr):
-                        out.append(identifier)
-            elif isinstance(e, ast.Subscript):
-                # | Subscript(expr value, slice slice, expr_context ctx)
-                # This will always be adding a symbol to something that's already in our symbol table and I think we can safely ignore it
-                raise IgnoreSymbolException(f'Found {self.node_str(e)} when resolving symbols in {self} - abandoning symbol resolution.')
-            else:
-                log.w(f'\tExpr({e})({self.node_str(e)}) does not seem to generate a symbol, skipping')
-                continue
-
-            # log.d('_resolve_expr_symbols', f'\t{out}')
-            result.extend(out)
-
-        return result
-
-    def _child_adds_symbol(self, symbol_names: List[str], values: List[Any]) -> None:
-        """
-        Adds one or more symbols from a child AST node to our table of symbols.
-        :param symbol_names: List of identifiers
-        :param values: Values for identifiers
-        :return: None
-        """
-
-        # There is a corner case here that I'm not quite sure what to do with.
-        # The easy case is when the number of names and the number of values match:
-        #   names:  [a, b, c]
-        #   values: [x, y, z]
-        #   ->
-        #   table {a:x, b:y, c:z}
-        # See? Easy
-        #
-        # It's also possible that multiple values in a tuple are being unpacked:
-        #   names:  [a, b, c]
-        #   values: [x()]
-        #   ->
-        #   table {a:x()[0], b:x()[1], c:x()[2]}
-        # This has encoding problems, but at least intent is clear
-        #
-        # But then, what about this:
-        #   names:  [[a, b], c]
-        #   values: [x()]
-        #   -?>
-        #   table {a:x()[0][0], b:x()[0][1], c:x()[1]} ???
-        #   -?>
-        #   table {a:x()[0], b:x()[0][1], c:x()[1]} ???
-        # I'm not really sure! It kind of sucks and hopefully we can just ignore the more complicated cases here.
-        #  For our purposes ignoring these should be fine because we only care about imports and we won't be able to
-        #  detect when a function call triggers an import - that's beyond our scope for now!
-
-        # self.dlog("_child_adds_symbol", f"({symbol_names}, {values})")
-        last_value = None
-        for name in symbol_names:
-            # if counts match, we can just pop them all
-            if len(values):
-                last_value = values.pop(0)
-
-            # todo: create some kind of index reference!
-            self._symbols[name] = last_value
+            log.w("i",f'{self}')
 
     def _make_child_wrapper(self, element):
-        log = self.logger("_make_child_wrapper")
-        wrapper = ASTWrapper(element, self, log_node = self.log_node)
-        if ImportStatement.node_is_import(element):
-            # new import in "our" context
-            self._local_imports = True
-            log.d(f"Making import: {self.node_str(element)}")
-            self._imports.append(ImportStatement(element, self, ImportStatement.Source_Local))
+        wrapper = ASTWrapper(self.path, element, self, log_node = self.log_node)
 
         return wrapper
 
@@ -626,83 +444,15 @@ class ASTWrapper(Logger):
         return [i.re_contextualize(ImportStatement.Source_Above) for i in self._imports]
 
     @property
-    def has_symbols(self):
-        return len(self._symbols) > 0
-
-    @property
-    def children_with_children(self):
-        return list(filter(lambda x: x.has_children, self.children))
-
-    @property
-    def has_local_imports(self):
-        return self._local_imports
-
-    @property
-    def local_imports(self):
-        return list(filter(lambda i: i.local, self._imports))
-
-    @property
-    def interesting(self):
-        # This is kind of a made up quality (ha! all qualities are made up! Anthropology!)
-        # its purpose is to prone any tree nodes that: have no local imports or no links to
-        # local imports
-
-        if self.has_local_imports:
-            return True # we have locally defined imports so we're important
-
-        for c in self.children:
-            if c.interesting:
-                return True # if our kids are interesting so are we
-
-        return False
-
-    @property
-    def interesting_children(self):
-        return list(filter(lambda x: x.interesting, self.children))
-
-    def imports_for_symbol(self, symbol_name: str = None) -> List[ImportStatement]:
-        symbol = self
-        if symbol_name:
-            symbol = self._symbols.get(symbol_name, None)
-
-            if symbol is None:
-                raise ValueError(f"Looked for symbol {symbol_name}, but found nothing in table: {self._symbols}")
-
-        # selected symbol imports
-        imports = list(symbol.local_imports)
-        # and all the imports of
-        for c in symbol.children:
-            imports.extend(c.imports_for_symbol())
-        return imports
-
-    def report(self):
-        me = f'>{self}'
-
-        imports = ''
-        # symbols = ''
-        kids_w_kids = ''
-
-        if self.has_local_imports:
-            imports = '\n\t' + '\n\t'.join([f'{i}' for i in self.local_imports])
-
-        # if self._symbols:
-        #     symbols = '\n*Symbols:\n\t' + '\n\t'.join([f'{i} = {v}' for i, v in self._symbols.items()])
-
-        interesting_kids = [cwc.report().split("\n") for cwc in self.interesting_children]
-
-        if interesting_kids:
-            kids_w_kids = '\n\t\\\n\t'
-            kids_w_kids += '\n\t'.join(chain.from_iterable(interesting_kids))
-
-        return me + imports + kids_w_kids
-        # return me + imports + symbols + kids_w_kids
+    def is_import(self):
+        return ImportStatement.node_is_import(self.node)
 
     @property
     def has_children(self):
         return self._n_class in list(self._NODES_WITH_CHILDREN_TO_KEYS.keys())
 
     @property
-    def _node_adds_symbol(self):
+    def adds_symbol(self):
         return self._n_class in list(self._NODES_THAT_ADD_TO_SYMBOL_TABLE_TO_KEY.keys())
 
     def _child_line_number(self, line_number):
@@ -1221,28 +971,331 @@ class ASTWrapper(Logger):
     def __repr__(self):
         return self.node_str(self.node)
 
-def ast_wrapper_for_file(path):
-    file = open(path, "rt")
-    first_line = file.readline()
-    # https://stackoverflow.com/questions/17912307/u-ufeff-in-python-string
-    # todo: maybe do this better?
-    if "-*- coding: utf-8 -*-" in first_line: # this isn't efficient but it's ok
-        file.close()
-        # todo: figure out how to detect uft-8 v.s. utf-8-sig
-        new_encoding = 'utf-8'
-        if ord(first_line[0]) == 65279: # \ufeff
-            new_encoding = 'utf-8-sig'
-            
-        # print(f'first character: "{first_line[0]}"({ord(first_line[0])})')
-        file = open(path, mode='rt', encoding=new_encoding)
-        # print(f"Found utf-8 encoding! Re-opening file!: {file}")
-        # new contents
-    else:
-        # reset position
-        file.seek(0)
+
+class ManagedASTWrapper(ASTWrapper):
+    _NAME = "MAstWrapper"
+
+    def __init__(self, path: str, node: ast.AST, parent: ASTWrapper = None, log_node=False):
+        super().__init__(path, node, parent, log_node)
+        self.manager = None
+
+    def set_manager(self, manager):
+        log = self.logger("set_manager")
+        log.v(f"{self}")
+        self.manager = manager
+
+        for child in self.children:
+            log.v(f"child: {child}")
+            if child.is_import:
+                self.manager.register_import(self._make_import_statement(child))
+            if child.adds_symbol:
+                # There is a corner case here that I'm not quite sure what to do with.
+                # The easy case is when the number of names and the number of values match:
+                #   names:  [a, b, c]
+                #   values: [x, y, z]
+                #   ->
+                #   table {a:x, b:y, c:z}
+                # See? Easy
+                #
+                # It's also possible that multiple values in a tuple are being unpacked:
+                #   names:  [a, b, c]
+                #   values: [x()]
+                #   ->
+                #   table {a:x()[0], b:x()[1], c:x()[2]}
+                # This has encoding problems, but at least intent is clear
+                #
+                # But then, what about this:
+                #   names:  [[a, b], c]
+                #   values: [x()]
+                #   -?>
+                #   table {a:x()[0][0], b:x()[0][1], c:x()[1]} ???
+                #   -?>
+                #   table {a:x()[0], b:x()[0][1], c:x()[1]} ???
+                # I'm not really sure! It kind of sucks and hopefully we can just ignore the more complicated cases here.
+                #  For our purposes ignoring these should be fine because we only care about imports and we won't be able to
+                #  detect when a function call triggers an import - that's beyond our scope for now!
 
 
-    file_contents = file.read()
-    file.close()
+                # todo: This is a sign of messy division of responsibilities - I haven't cleanly
+                # todo: set out which layer handles which
+                symbol_names, values = child.get_symbol_values()
+                last_value = None
+                for name in symbol_names:
+                    # if counts match, we can just pop them all
+                    if len(values):
+                        last_value = self._make_child_wrapper(values.pop(0))
 
-    return ASTWrapper(ast.parse(file_contents, filename=path))
+                    # todo: create some kind of index reference!
+                    self.manager.register_symbol(name, last_value)
+
+
+
+    def _make_child_wrapper(self, element):
+        log = self.logger("_make_child_wrapper")
+        wrapper = ManagedASTWrapper(self.path, element, self, log_node = self.log_node)
+
+        return wrapper
+
+    def _make_import_statement(self, node):
+        log = self.logger("_make_import_statement")
+        log.v(f"{node}")
+        node = node
+        if isinstance(node, ASTWrapper):
+            node = node.node
+
+        return ImportStatement(node, self.path, self, ImportStatement.Source_Local)
+
+    def get_symbol_values(self):
+        log = self.logger("_handle_node_symbol")
+        log.v("")
+        # if not self.adds_symbol or not self.parent:
+        if self.adds_symbol:
+            # find and add symbols to table
+            member_name = self._NODES_THAT_ADD_TO_SYMBOL_TABLE_TO_KEY[self._n_class]
+            symbol_member = getattr(self.node, member_name, None)
+
+            if symbol_member is None:
+                raise ValueError(f"{self}: expected to find a symbol!")
+
+            values = [self._get_r_side_node()]
+            # self.wlog('_i_:node_adds_symbol', f'{self}({symbol_member})')
+            if self._n_class in self._SYMBOL_BY_EXPR:
+                # Symbol is contained in an expression, that must be resolved first
+                try:
+                    symbol_names = self._resolve_expr_symbols(symbol_member)
+                except IgnoreSymbolException as e:
+                    log.w(f'{e.message}')
+                    symbol_names = []
+            else:
+                # symbol is contained in an id, which is just a string, so we already have it in symbol_member
+                symbol_names = [symbol_member]  # makes the processing easier if it's always a list
+
+            if len(symbol_names) > 0:
+                if len(symbol_names) > 1 and len(values) == 1:
+                    # try unpacking the values
+                    values = self._try_explode_values(values[0])
+
+                    if len(symbol_names) > 1 and len(values) == 1:
+                        log.d(f"many symbols to one value! Likely a function unpacking!\n\t\t\t\t{self}")
+                elif len(symbol_names) != len(values):
+                    log.w(
+                        f"{len(symbol_names)}syms != {len(values)}vals! Symbol table may be flawed!\n\t\t\t\t{self}")
+
+                return symbol_names, values
+            # else:
+            #     log.w('_handle_node_symbol', f'Skipping add because we generated no symbols')
+
+        return [], []
+
+
+    def _get_r_side_node(self):
+        log = self.logger("_get_r_side_node")
+        log.v(f"{self.node}")
+
+        # FunctionDef(identifier name, arguments args, stmt* body, expr* decorator_list, expr? returns)
+        # | AsyncFunctionDef(identifier name, arguments args, stmt* body, expr* decorator_list, expr? returns)
+        # | ClassDef(identifier name, expr* bases, keyword* keywords, stmt* body, expr* decorator_list)
+        # | Assign(expr* targets, expr value)
+        # | AugAssign(expr target, operator op, expr value)
+        # | AnnAssign(expr target, expr annotation, expr? value, int simple)
+
+        node = self.node
+        # get the right hand side of the statement
+        if isinstance(node, ast.Assign):
+            node = node.value
+        elif isinstance(node, ast.AugAssign):
+            node = node.value
+        elif isinstance(node, ast.AnnAssign):
+            node = node.value
+
+        return node
+
+    def _try_explode_values(self, node):
+        log = self.logger("_try_explode_values")
+        values = []
+
+        if isinstance(node, ast.Tuple):
+            # | Tuple(expr* elts, expr_context ctx)
+            for expr in node.elts:
+                values.append(expr)
+        else:
+            values.append(node)
+
+        return values
+
+    def _resolve_expr_symbols(self, exprs):
+        log = self.logger("_handle_node_symbol")
+        if not isinstance(exprs, list):
+            exprs = [exprs]
+
+        # log.v(f'Exprs: {", ".join([self.node_str(e) for e in exprs])}')
+        # log.v(f'Exprs: {exprs}')
+        result = []
+        for e in exprs:
+            out = []
+            if isinstance(e, ast.Name):
+                # | Name(identifier id, expr_context ctx)
+                out.append(f'{e.id}')
+            elif isinstance(e, ast.Attribute):
+                # | Attribute(expr value, identifier attr, expr_context ctx)
+                # this expects a list
+                value_strings = self._resolve_expr_symbols(e.value)
+                # [2493]{table_user}{passfield}.{requires}[-= #1].{min_length} = #0
+                # ->
+                # table_user[passfield].requires[-1].min_length
+                # expected to have value of
+                if not isinstance(value_strings, list) or len(value_strings) != 1:
+                    log.e(f"value: {self.node_str(e.value)}, id: {e.attr}")
+                    raise Exception(f"{self}:This is an unexpected format: {value_strings}")
+                out.append(f'{value_strings[0]}.{e.attr}')
+            elif isinstance(e, ast.Tuple):
+                # | Tuple(expr* elts, expr_context ctx)
+                for expr in e.elts:
+                    for identifier in self._resolve_expr_symbols(expr):
+                        out.append(identifier)
+            elif isinstance(e, ast.Subscript):
+                # | Subscript(expr value, slice slice, expr_context ctx)
+                # This will always be adding a symbol to something that's already in our symbol table and I think we can safely ignore it
+                raise IgnoreSymbolException(f'Found {self.node_str(e)} when resolving symbols in {self} - abandoning symbol resolution.')
+            else:
+                log.w(f'\tExpr({e})({self.node_str(e)}) does not seem to generate a symbol, skipping')
+                continue
+
+            # log.d('_resolve_expr_symbols', f'\t{out}')
+            result.extend(out)
+
+        return result
+
+
+class SymbolManager(Logger):
+    """
+    Tracks the imports in a symbol and store the AST tree
+
+    Knows nothing about actual files and just passes around references
+    """
+
+    _Name = "Symbol"
+
+    def __init__(self, name: str, ast: ManagedASTWrapper, **kwargs):
+        super().__init__(**kwargs)
+
+        self.name = name
+        self.ast = ast
+        self.scope_imports : List[ImportStatement] = []
+        self.symbols: Dict[str, SymbolManager] = {}
+        self._symbol_refs: Dict[str, SymbolManager] = {}
+
+    def register_symbol(self, name: str, value: ManagedASTWrapper) -> None:
+        # make child symbol
+        self.symbols[name] = SymbolManager(name, value)
+        # tell the value it has a manager now
+        value.set_manager(self.symbols[name])
+
+    def register_import(self, statement: ImportStatement) -> None:
+        self.scope_imports.append(statement)
+
+    @property
+    def imports(self) -> List[ImportReference]:
+        imps = []
+        for i in self.scope_imports:
+            imps.extend(i.references)
+        for c in self.symbols.values():
+            imps.extend(c.imports)
+
+        return imps
+
+    @property
+    def has_imports(self) -> bool:
+        return len(self.imports) > 0
+
+    @property
+    def symbols_with_imports(self) -> Dict[str, 'SymbolManager']:
+        return {k:v for k, v in self.symbols.items() if v.has_imports}
+
+    def imp_str(self):
+        imports_str = ""
+        symbols_str = ""
+        if self.scope_imports:
+            imports_str = 'Imports:\n{}'.format(
+                self.indent([str(i) for i in self.scope_imports])
+            )
+        if self.symbols_with_imports:
+            symbols_str = 'Symbols:\n{}'.format(
+                self.indent([v.imp_str() for k, v in self.symbols_with_imports.items()])
+            )
+            if self.scope_imports:
+                symbols_str = "\n" + symbols_str
+
+        return 'SM[{}]-> {}\n{}{}'.format(
+            self.name, self.ast,
+            self.indent(imports_str),
+            self.indent(symbols_str)
+        )
+
+    def sum_str(self):
+        imports_str = ""
+        symbols_str = ""
+        if self.scope_imports:
+            imports_str = 'Imports:\n{}'.format(
+                self.indent([str(i) for i in self.scope_imports])
+            )
+
+        if self.symbols:
+            symbols_str = 'Symbols:\n{}'.format(
+                self.indent([v.sum_str() for k, v in self.symbols.items()])
+            )
+            if self.scope_imports:
+                symbols_str = "\n" + symbols_str
+
+        return 'SM[{}]-> {}\n{}{}'.format(
+            self.name, self.ast,
+            self.indent(imports_str),
+            self.indent(symbols_str)
+        )
+
+    def __str__(self):
+        return self.imp_str()
+
+    def __repr__(self):
+        return str(self)
+
+
+class ModuleManager(Logger):
+    """
+    May just be a re-treading of ModuleListingWrapper
+    """
+
+    _NAME = "ModuleManager"
+
+    def __init__(self, path, **kwargs):
+        super().__init__(**kwargs)
+
+        self.path = PythonPathWrapper(path)
+
+        if not self.path.is_py_file:
+            raise ValueError(f"Path '{self.path}' does not appear to by a python file!")
+
+        wrapper = ManagedASTWrapper(
+            self.path.str(),
+            ast.parse(self.path.read(), filename=self.path.str())
+        )
+
+        self.symbols = SymbolManager(self.module, wrapper)
+        wrapper.set_manager(self.symbols)
+
+    @property
+    def imports(self) -> List[ImportReference]:
+        return self.symbols.imports
+
+    @property
+    def valid_import_paths(self) -> List[str]:
+        paths = []
+        for i in self.imports:
+            if not i.being_ignored and i.path:
+                paths.append(i.path)
+
+        return paths
+
+    @property
+    def module(self):
+        return self.path.module_guess
