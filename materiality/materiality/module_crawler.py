@@ -3,9 +3,8 @@ from os.path import join, splitext
 from typing import Mapping, Set, List, Optional, Dict, Any
 
 from .utils import Logger
-from .ast_crawler import ImportStatement, ASTWrapper, ImportReference, ModuleManager
+from .ast_crawler import ImportReference
 from .path_manager import PathManager
-from findimports import find_imports, ImportInfo, ModuleGraph
 
 class PathWrapper(str):
 
@@ -77,7 +76,8 @@ class ModuleCrawler(Logger):
         self.paths_checked.add(target)
 
         for imp in mod_manage.imports:
-            self.pm.resolve_import(imp)
+            self.pm.set_external_path_if_exists(imp)
+            # self.pm.resolve_import(imp)
 
         for p in mod_manage.valid_import_paths:
             if p not in self.paths_checked:

@@ -1,6 +1,8 @@
 
 from os.path import basename
-from pathlib import Path
+from pathlib import Path, PurePath
+
+from typing import Optional
 
 VERBOSE = 'VERBOSE'
 DEBUG = 'DEBUG'
@@ -122,10 +124,30 @@ class PythonPathWrapper(Logger):
 
     def __init__(self, str_path:str, **kwargs):
         super().__init__(**kwargs)
-        self._o_path = Path(str_path)
-        self._m_path = Path(str_path)
+        log = self.logger("__init__")
+        log.w(f"{str_path}")
+        # self._o_path = Path(str_path)
+        self.path_obj = Path(str_path)
+        self._root = None
+        self._stem = None
+        self._parse()
 
         self._encoding = None
+
+    def _parse(self):
+        log = self.logger("_parse")
+        log.w(f"{self.path_obj}")
+        parts = 1
+
+        directory = self.path_obj.parent
+        while self._does_directory_have_init(directory):
+            parts += 1
+            directory = directory.parent
+
+        log.w(f"root: {self._root} -> {Path(*self.path_obj.parts[:-parts])}")
+        log.w(f"stem: {self._stem} -> {Path(*self.path_obj.parts[-parts:])}")
+        self._root = Path(*self.path_obj.parts[:-parts])
+        self._stem = Path(*self.path_obj.parts[-parts:])
 
     def _raise_exception_if_not_py(self):
         if not self.is_py_file:
@@ -134,7 +156,7 @@ class PythonPathWrapper(Logger):
     def _detect_py_file_encoding(self) -> str:
         # https://stackoverflow.com/questions/17912307/u-ufeff-in-python-string
         enc = None
-        with self._m_path.open() as file:
+        with self.path_obj.open() as file:
             first_line = file.readline()
             if "-*- coding: utf-8 -*-" in first_line:
                 enc = self._ENC_UTF8
@@ -144,14 +166,41 @@ class PythonPathWrapper(Logger):
         self._encoding = enc
         return enc
 
+    def _does_directory_have_init(self, path: Path):
+        if not path.is_dir():
+            raise ValueError(f"{path}: not a directory")
+
+        path = path / "__init__.py"
+        if not path.exists():
+            return False
+
+        return True
+
     def read(self):
         self._raise_exception_if_not_py()
         self._detect_py_file_encoding()
-        with self._m_path.open(encoding=self._encoding) as file:
+        with self.path_obj.open(encoding=self._encoding) as file:
             return file.read()
 
+    def swap_root(self, new_root: str) -> 'PythonPathWrapper':
+        # first need to
+        new_path = PythonPathWrapper(str(new_root))
+        new_path = new_path._root
+        new_path = new_path / self._stem
+        # mod_replace_parts = modules_to_replace.split(".")
+        # for idx, part in enumerate(self._stem.parts):
+        #     if mod_replace_parts[idx] == part:
+        #         new_path / part
+
+        self.path_obj = new_path
+        self._parse()
+
+        return self
+
+
+
     def find_relative_import(self, level, target_module):
-        dir = self._m_path
+        dir = self.path_obj
 
         if not level > 0:
             raise ValueError(f"Cannot find relative import with level of {level}")
@@ -165,58 +214,41 @@ class PythonPathWrapper(Logger):
             dir = dir / f'{target_module}{ext}'
             print(dir)
             if dir.exists() and dir.is_file():
-                self._m_path = dir
+                self.path_obj = dir
+                self._parse()
                 return True
 
         return False
 
-
-    def _does_directory_have_init(self, path: Path):
-        if not path.is_dir():
-            raise ValueError(f"{path}: not a directory")
-
-        path = path / "__init__.py"
-        if not path.exists():
-            return False
-
-        return True
-
     @property
     def module_guess(self):
-        parts = 1
-        include_name = True
-        if self._m_path.name == "__init__.py":
-            include_name = False  # ignore file name if the file name is the module package
+        log = self.logger("module_guess")
+        log.w(f'{self.path_obj} | {self._stem}')
+        parts = list(self._stem.parts[:-1])
+        if self.path_obj.name != "__init__.py":
+            parts.append(self.path_obj.stem)
 
-        directory = self._m_path.parent
-        while self._does_directory_have_init(directory):
-            parts += 1
-            directory = directory.parent
-
-        parts = list(self._m_path.parts[-parts:-1])
-        if include_name:
-            parts.append(self._m_path.stem)
-
-        return '.'.join(parts)
+        log.w(f'{self.path_obj} -> {".".join(self._stem.parts)}')
+        return ".".join(parts)
 
     def str(self):
         return str(self)
 
     @property
     def is_py_file(self):
-        return self._m_path.suffix in self._python_exts
+        is_py = self.path_obj.suffix in self._python_exts
+        if not is_py: # check if we're in a package
+            try:
+                is_py = self._does_directory_have_init(self.path_obj)
+            except ValueError:
+                # just return false
+                pass
+        return is_py
 
     @property
     def short_version(self):
-        included_sections = []
-
-        for section in self._m_path.parts:
-            if "python" in section or included_sections:
-                included_sections.append(section)
-                continue
-
-        return f"/{'/'.join(included_sections)}"
+        return f"/{self._root[-1]}/{'/'.join(self._stem)}"
 
 
     def __str__(self):
-        return str(self._m_path)
+        return str(self.path_obj)

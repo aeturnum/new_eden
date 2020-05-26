@@ -4,8 +4,6 @@ from importlib.util import find_spec
 from importlib.machinery import BuiltinImporter
 from copy import deepcopy, copy
 from typing import Set, List, Optional, Dict, Any
-from itertools import chain
-from os.path import basename
 
 from .utils import Logger, PythonPathWrapper
 
@@ -35,18 +33,48 @@ class ImportReference(Logger):
         super().__init__(**kwargs)
 
         self.statement_file_path = statement_file_path
+        # canonical module name
         self.module = module
+        # canonical list of symbols imported from module
         self.symbols = symbols
+        # spec object - MAY BE IGNORED - only finds modules on path
         self.spec = None
         self.ignore_reason = None
+        # path found after resolving relative import
+        # also sets module
         self.resolved_path = None
+        # path for external GIT repo
+        self.external_path = None
+        # note about relative level of import
         self.level = level
 
 
         log = self.logger("__init__")
         log.v(f"({module}, {symbols})")
 
-        self._resolve_spec()
+        self._resolve_path()
+
+    def _resolve_path(self):
+        log = self.logger("_resolve_path")
+        new_path = None
+        if self.relative:
+            new_path = PythonPathWrapper(self.statement_file_path)
+            log.w(f"relative path 1: {new_path}")
+            new_path.find_relative_import(self.level, self.module)
+            log.w(f"relative path 2: {new_path}")
+
+        if new_path is not None:
+            log.d(f"{self}| {self.path} -> {new_path}")
+            self.resolved_path = new_path.str()
+            self.module = new_path.module_guess
+            # do this after doing the relative resolution
+            self._resolve_spec()
+        else:
+            #
+            log.d(f"{self}| Path correct")
+            # Here we want to resolve the spec before "resolving"
+            self._resolve_spec()
+            self.resolved_path = self.path
 
     def _find_spec(self, module_name):
         log = self.logger("_find_spec")
@@ -120,20 +148,14 @@ class ImportReference(Logger):
                 self.module = found_name
 
             self.spec = spec
+            self.resolved_path = spec.origin
         else:
             log.w(f'Module "{self.module}" does not appear to be installed in current path.')
 
-    def resolve(self, new_path: PythonPathWrapper = None):
-        log = self.logger("resolve")
-        if new_path is not None:
-            log.d(f"{self}| {self.path} -> {new_path}")
-            self.resolved_path = new_path.str()
-            self.module = new_path.module_guess
-            self._resolve_spec()
-        else:
-            #
-            log.d(f"{self}| Path correct")
-            self.resolved_path = self.path
+    def set_external_path(self, new_path: str):
+        log = self.logger("set_external_path")
+        self.external_path = PythonPathWrapper(self.path).swap_root(new_path).str()
+        log.w(f"self.external_path = {self.external_path}")
 
 
     # just in case
@@ -142,24 +164,37 @@ class ImportReference(Logger):
         return self.module
 
     @property
-    def origin(self):
-        return getattr(self.spec, "origin", None)
-
-    @property
     def relative(self):
         return self.level > 0
 
     @property
-    def raw_path(self):
-        return self.origin
+    def spec_path(self) -> Optional[str]:
+        """
+        Get the path associated with the version of this module that exists in the current python environment.
+        Will not reflect if we have an external git repo of this path
+        :return: str
+        """
+        return getattr(self.spec, "origin", None)
 
     @property
     def needs_resolution(self):
         return self.resolved_path is None
 
     @property
-    def path(self):
-        return self.resolved_path or self.raw_path
+    def path(self) -> str:
+        """
+        Get the most correct path for this import. Could have a relative path or could be an external path
+        :return: str
+        """
+        return self.external_path or self.resolved_path or getattr(self.spec, "origin", None)
+
+    @property
+    def origin(self):
+        """
+        Mirror of self.path
+        :return:
+        """
+        return self.path
 
     @property
     def being_ignored(self):
@@ -194,8 +229,8 @@ class ImportReference(Logger):
     @property
     def _spec_str(self):
         origin = "None"
-        if self.spec and self.spec.origin:
-            origin = PythonPathWrapper(self.spec.origin).short_version
+        if self.path:
+            origin = PythonPathWrapper(self.path).short_version
 
         if self.spec:
             return f'-> S[{self.spec.name}]<{origin}>'
@@ -209,9 +244,7 @@ class ImportReference(Logger):
             # can appear as multiples
             return f'{self._badge}Import {self.module}{self._spec_str}'
         else:
-            mod_str = self.module
-            if not self.module:
-                mod_str = ''
+            mod_str = self.module or ""
             return '{}From {}{} Import {}{}'.format(
                 self._badge,
                 self.level * ".",

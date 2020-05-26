@@ -1,15 +1,6 @@
 from os.path import join
-from os import getcwd, listdir
-import findimports
-from importlib.util import find_spec
-from imp import find_module
-from sys import path
 
 from pydriller import RepositoryMining
-# from modulefinder import ModuleFinder
-from pydeps import pydeps
-from pydeps.py2depgraph import py2dep
-from pydeps.target import Target
 
 
 from .utils import Logger
@@ -33,10 +24,6 @@ class DependencyFinder(Logger):
 
     def crawl_file_modules(self, file_name):
         mc = ModuleCrawler(join(self.base, file_name))
-        # mc.step()
-        # mc.step()
-        # mc.step()
-        # mc.step()
 
         while not mc.done:
             mc.step()
