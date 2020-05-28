@@ -12,6 +12,7 @@ class DependencyFinder(Logger):
     def __init__(self, base, **kwargs):
         super().__init__(**kwargs)
         self.base = base
+        self.mc = None
 
     def crawl_file(self, file_name):
         for commit in RepositoryMining(self.base, filepath=file_name).traverse_commits():
@@ -23,12 +24,14 @@ class DependencyFinder(Logger):
                     # author.add_change(change)
 
     def crawl_file_modules(self, file_name):
-        mc = ModuleCrawler(join(self.base, file_name))
+        full_path = join(self.base, file_name)
+        self.mc = ModuleCrawler(full_path)
 
-        while not mc.done:
-            mc.step()
+        while not self.mc.done:
+            self.mc.step()
 
-
+        # stats = self.mc.get_import_tree_for_file(full_path)
+        # print(stats.report())
 
     def crawl_repo(self):
         for commit in RepositoryMining(self.base).traverse_commits():

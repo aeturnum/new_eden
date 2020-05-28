@@ -1,7 +1,9 @@
-from .utils import Logger, dlog, wlog
+from .utils import Logger, dlog, wlog, PythonPathWrapper
 
 
 class ChangeStats(Logger):
+    _NAME = "ChangeStats"
+
     def __init__(self, added = 0, removed = 0, **kwargs):
         super().__init__(**kwargs)
         self.added = added
@@ -44,11 +46,9 @@ class ChangeStats(Logger):
         return str(self)
 
 class Author(Logger):
-    _NAME = "Change"
+    _NAME = "Author"
 
     authors = []
-
-
 
     @staticmethod
     def find_author(commit_author):
@@ -66,7 +66,7 @@ class Author(Logger):
 
         return Author(commit_author.name, commit_author.email)
 
-    def __init__(self, name=None, email=None, changes=None, **kwargs):
+    def __init__(self, name=None, email=None, changes=None, index=None, **kwargs):
         super().__init__(**kwargs)
         self.names = set()
         self.emails = set()
@@ -81,7 +81,9 @@ class Author(Logger):
 
         self._merge(name, email)
 
-        Author.authors.append(self)
+        if index is None:
+            index = Author.authors
+        index.append(self)
 
     def merge(self, author):
         self._merge(author.name, author.email)
@@ -129,7 +131,8 @@ class Author(Logger):
         return self._top_email
 
     def add_change(self, change):
-        self.dlog('add_change', f'<- {change}')
+        log = self.logger("add change")
+        log.d(f'<- {change}')
         self.changes.append(change)
         self.stats.merge_change_stat(change.stats)
 
@@ -163,14 +166,17 @@ class Change(Logger):
 
     def __init__(self, path, added, removed, commit, **kwargs):
         super().__init__(**kwargs)
+        log = self.logger("__init__")
+        self._commit = commit
         self.path = path
         self.stats = ChangeStats(added, removed)
         self.date = commit.author_date
-        # todo: decide if I really wanna do this here
-        self.author = Author.find_author(commit.author)
-        self.author.add_change(self)
 
-        self.dlog(f'__init__', f'Created')
+        # log.d(f'Created')
+
+    def get_author_from_index(self, author_index):
+        self.author = author_index.find_author(self._commit.author)
+        self.author.add_change(self)
 
     def __str__(self):
         return f'Change[{self.path}]{self.stats}'
@@ -204,12 +210,14 @@ class File(Logger):
         self.stats = ChangeStats()
 
     def add_change(self, change):
-        self.dlog(f'add_change', f'Adding {change} to {self}')
+        log = self.logger("add_change")
+        # log.d(f'Adding {change} to {self}')
         self.changes.append(change)
         self.stats.merge_change_stat(change.stats)
         self.authors.add(change.author)
 
     def __str__(self):
+        # p = PythonPathWrapper(self.path).short_version
         return f'File[{self.path}][{len(self.authors)} authors]{self.stats}'
 
     def __repr__(self):

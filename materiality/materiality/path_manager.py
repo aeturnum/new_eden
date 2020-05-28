@@ -1,8 +1,12 @@
+from pathlib import  Path
+from typing import Set, List, Optional, Dict, Any
+from collections import namedtuple
 
 from .utils import Logger, PythonPathWrapper
-from .ast_crawler import ModuleManager, ImportReference
+from .ast_crawler import ModuleManager, ImportReference, StatNode
+from .git_helper import GitHelper
 
-from typing import Set, List, Optional, Dict, Any
+ModPaths = namedtuple("ModPaths",["common_root", "module_path", "git_path"])
 
 class PathManager(Logger):
     """
@@ -14,50 +18,77 @@ class PathManager(Logger):
     _NAME = "PathManager"
 
     # locations
-    _git_repos = {
-        'web2py': '/Users/ddrexler/src/python/web2py/web2py.py',
-        'eden': '/Users/ddrexler/masters/Source/__init__.py',
-        'gluon': '/Users/ddrexler/src/python/web2py/gluon/__init__.py',
-        'pydal':'/Users/ddrexler/src/python/web2py/gluon/packages/dal/pydal/__init__.py',
-        'yatl': '/Users/ddrexler/src/python/web2py/gluon/packages/yatl/yatl/__init__.py'
+    # _git_repos = {
+    #     'web2py': '/Users/ddrexler/src/python/web2py/',
+    #     'eden': '/Users/ddrexler/masters/Source/',
+    #     'gluon': '/Users/ddrexler/src/python/web2py/gluon/'
+    # }
+    # _module_map = {
+    #     'web2py': {
+    #         'common_root': '/Users/ddrexler/src/python/web2py/',
+    #         'module_path': 'web2py.py',
+    #         'git_path': ''
+    #     },
+    #     'eden': {
+    #         'common_root': '/Users/ddrexler/masters/Source/',
+    #         'module_path': '__init__.py',
+    #         'git_path': ''
+    #     },
+    #     'gluon': {
+    #         'common_root': '/Users/ddrexler/src/python/web2py/gluon/',
+    #         'module_path': '__init__.py',
+    #         'git_path': '../'
+    #     },
+    #     'pydal': {
+    #         'common_root': '/Users/ddrexler/src/python/web2py/gluon/packages/dal/',
+    #         'module_path': 'pydal/__init__.py',
+    #         'git_path': ''
+    #     },
+    #     'yatl': {
+    #         'common_root': '/Users/ddrexler/src/python/web2py/gluon/packages/yatl/',
+    #         'module_path': 'yatl/__init__.py',
+    #         'git_path': ''
+    #     },
+    #     'bcgs': {
+    #         'common_root': '/Users/ddrexler/src/python/breitbart_comment_grabbing_server/',
+    #         'module_path': 'bcgs/server.py',
+    #         'git_path': ''
+    #
+    #     }
+    #
+    # }
+    _module_map : Dict[str, ModPaths] = {
+        'web2py': ModPaths('/Users/ddrexler/src/python/web2py/', 'web2py.py', ''),
+        'eden': ModPaths('/Users/ddrexler/masters/Source/', '__init__.py', ''),
+        'gluon': ModPaths('/Users/ddrexler/src/python/web2py/gluon/', '__init__.py', '../'),
+        'pydal': ModPaths('/Users/ddrexler/src/python/web2py/gluon/packages/dal/', 'pydal/__init__.py', ''),
+        'yatl': ModPaths('/Users/ddrexler/src/python/web2py/gluon/packages/yatl/', 'yatl/__init__.py', ''),
+        'bcgs': ModPaths('/Users/ddrexler/src/python/breitbart_comment_grabbing_server/', 'bcgs/server.py', '')
     }
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
 
         self.path_to_module: Dict[str, ModuleManager] = {}
-        self._shadow_paths: Dict[str, ModuleManager] =  {}
-        self.module_name_to_module: Dict[str, ModuleManager] = {}
+        # self.module_name_to_module: Dict[str, ModuleManager] = {}
+        self.git_helpers = {k:GitHelper(f'{v.common_root}/{v.git_path}') for k, v in self._module_map.items()}
+        self.git_helpers['bcgs'].index()
 
-    # def _get_real_path(self, module_name: str) -> Optional[str]:
-    #     if module_name in self._git_repos:
-    #         return self._git_repos[module_name]
-    #
-    #     return None
-
-    # def _resolve_relative_import_path(self, imp_ref: ImportReference):
-    #     ppw = PythonPathWrapper(imp_ref.statement_file_path)
-    #     ppw.find_relative_import(imp_ref.level, imp_ref.module)
-    #     # todo: this doesn't fully solve the problem, because we still use find_spec to search
-    #     # todo: for the module name
-    #     # todo: maybe we should filter path names when we're creating ModuleManagers
-    #     imp_ref.resolve(ppw)
-
-    def _search_for_git_module(self, full_module_path):
+    def _search_for_module(self, full_module_path:str) -> Optional[ModPaths]:
         # todo: this needs to replace the root of the rest of the module path
-        log = self.logger("_search_for_git_module")
-        partial_path = None
+        log = self.logger("_search_for_module")
+        partial_mod_name = None
         match = None
         for section in full_module_path.split("."):
-            if not partial_path:
-                partial_path = section
+            if not partial_mod_name:
+                partial_mod_name = section
             else:
-                partial_path = f'{partial_path}.{section}'
+                partial_mod_name = f'{partial_mod_name}.{section}'
 
-            if partial_path in self._git_repos:
-                match = self._git_repos[partial_path]
+            if partial_mod_name in self._module_map:
+                match = self._module_map[partial_mod_name]
 
-        log.w(f'found {full_module_path} -> {match}')
+        log.v(f'found {full_module_path} -> {match}')
         return match
 
     def _get_create_mm(self, path: str) -> ModuleManager:
@@ -66,17 +97,25 @@ class PathManager(Logger):
 
         return self.path_to_module[path]
 
-    def external_path(self, module_name):
-        return self._search_for_git_module(module_name)
+    def module_path(self, module_name: str) -> Optional[str]:
+        map_entry = self._search_for_module(module_name)
+        if map_entry:
+            root = Path(map_entry.common_root) / map_entry.module_path
+            return str(root)
 
-    def has_external_path(self, module_name):
-        return self._search_for_git_module(module_name) is not None
+        return None
 
-    # def check_for_external_path(self, imp_ref : ImportReference):
-    #     if self.has_external_path(imp_ref.module):
+    def has_module_path(self, module_name):
+        return self._search_for_module(module_name) is not None
+
+    def path_stat_tree(self, path):
+        mod_manager = self.module_for_path(path)
+
+        root = mod_manager.get_stat()
+
 
     def set_external_path_if_exists(self, imp_ref: ImportReference) -> None:
-        ext_path = self.external_path(imp_ref.module)
+        ext_path = self.module_path(imp_ref.module)
         if ext_path:
             imp_ref.set_external_path(ext_path)
 
@@ -90,10 +129,10 @@ class PathManager(Logger):
         log = self.logger("module_for_path")
 
         path_wrapper = PythonPathWrapper(path)
-        ext_path = self.external_path(path_wrapper.module_guess)
+        ext_path = self.module_path(path_wrapper.module_guess)
 
         if ext_path:
-            log.w(f"Swapping path {path_wrapper} -> {ext_path} ")
+            log.v(f"Swapping path {path_wrapper} -> {ext_path} ")
             path = path_wrapper.swap_root(ext_path).str()
 
         return self._get_create_mm(path)

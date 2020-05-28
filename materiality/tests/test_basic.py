@@ -13,7 +13,8 @@ def test_basic():
     #     print(a)
 
 def test_module_finder():
-    base = "/Users/ddrexler/src/python/web2py/"
+    # base = "/Users/ddrexler/src/python/web2py/"
+    base = "/Users/ddrexler/src/python/breitbart_comment_grabbing_server/bcgs/"
 
     c = DependencyFinder(base)
-    c.crawl_file_modules("web2py.py")
+    mc = c.crawl_file_modules("server.py")

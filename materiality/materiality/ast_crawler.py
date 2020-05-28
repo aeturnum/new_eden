@@ -19,6 +19,12 @@ class ImportReference(Logger):
 
     _NAME = "ImportReference"
 
+    # todo: This class is 'working' if it finds a path for the import
+    # todo: but currently, this is not how errors are set. If we can't find
+    # todo: the spec we should be setting the NOT_FOUND error, but I forgot
+    # todo: to do this and it's why the class works at all.
+    # todo: I should go back and sort out the internal logic to be focused on
+    # todo: finding the spec as one way to discover the path
     # normal errors
     NOT_FOUND = "Module Not Found"
     SYSTEM_LIBRARY = "System Module"
@@ -43,6 +49,7 @@ class ImportReference(Logger):
         # path found after resolving relative import
         # also sets module
         self.resolved_path = None
+        self.needs_resolution = True
         # path for external GIT repo
         self.external_path = None
         # note about relative level of import
@@ -50,7 +57,7 @@ class ImportReference(Logger):
 
 
         log = self.logger("__init__")
-        log.v(f"({module}, {symbols})")
+        log.w(f"({module}, {symbols})")
 
         self._resolve_path()
 
@@ -59,22 +66,22 @@ class ImportReference(Logger):
         new_path = None
         if self.relative:
             new_path = PythonPathWrapper(self.statement_file_path)
-            log.w(f"relative path 1: {new_path}")
-            new_path.find_relative_import(self.level, self.module)
-            log.w(f"relative path 2: {new_path}")
-
-        if new_path is not None:
-            log.d(f"{self}| {self.path} -> {new_path}")
+            # log.w(f"relative path 1: {new_path}")
+            new_symbols = new_path.find_relative_import(self.level, self.module, self.symbols)
+            # log.d(new_path)
+            # log.w(f"relative path 2: {new_path}")
+            log.v(f"{self}| {self.path} -> {new_path}")
             self.resolved_path = new_path.str()
             self.module = new_path.module_guess
-            # do this after doing the relative resolution
-            self._resolve_spec()
+            self.needs_resolution = False
+            self.symbols = new_symbols
+            # if not new_symbols:
+            #     raise ValueError(f"Could not find relative import! {self}: mod: {self.module}, sym: {self.symbols}")
         else:
             #
-            log.d(f"{self}| Path correct")
+            log.v(f"{self}| Path correct")
             # Here we want to resolve the spec before "resolving"
             self._resolve_spec()
-            self.resolved_path = self.path
 
     def _find_spec(self, module_name):
         log = self.logger("_find_spec")
@@ -84,7 +91,7 @@ class ImportReference(Logger):
             return module_name, None
 
         if self.ignore_reason:
-            log.d(f'Module "{module_name}" being ignored, not finding spec')
+            log.v(f'Module "{module_name}" being ignored, not finding spec')
             return module_name, None
 
         spec = None
@@ -107,13 +114,13 @@ class ImportReference(Logger):
         if spec is None and '.' in module_name:
             # might be a X from Y situation rendered as X.Y, remove a dot and try that as the module
             (maybe_module, new_member) = module_name.rsplit('.', 1)
-            log.d(f'Module "{module_name}" can\'t be found, trying {maybe_module}')
+            log.w(f'Module "{module_name}" can\'t be found, trying {maybe_module}')
 
             return self._find_spec(maybe_module)
 
         if exception:
             self.ignore_reason = ignore_reason
-            log.d(f'name "{self}" raised: {exception}')
+            log.v(f'name "{self}" raised: {exception}')
 
         return module_name, spec
 
@@ -126,11 +133,11 @@ class ImportReference(Logger):
             # dlog(f'Checking if spec is system spec: {spec}')
             if spec.origin and 'site-packages' not in spec.origin:
                 # builtin case 1
-                log.d(f'Module "{self.module}" is not in sitepackages, it is a builtin.')
+                log.v(f'Module "{self.module}" is not in sitepackages, it is a builtin.')
                 self.ignore_reason = self.SYSTEM_LIBRARY
             elif spec.loader and spec.loader is BuiltinImporter:
                 # builtin case 2
-                log.d(f'Module "{self.module}" uses the buildin importer.')
+                log.v(f'Module "{self.module}" uses the buildin importer.')
                 self.ignore_reason = self.SYSTEM_LIBRARY
 
             # we're importing a submodule we didn't expect
@@ -148,9 +155,20 @@ class ImportReference(Logger):
                 self.module = found_name
 
             self.spec = spec
-            self.resolved_path = spec.origin
+            self.needs_resolution = False
         else:
-            log.w(f'Module "{self.module}" does not appear to be installed in current path.')
+            # try treating this like a relative import
+            if not self.relative:
+                try:
+                    new_path = PythonPathWrapper(self.statement_file_path)
+                    new_symbols = new_path.find_relative_import(1, self.module)
+                    log.d(new_path)
+                    self.resolved_path = new_path.str()
+                    self.ignore_reason = None
+                    self.needs_resolution = False
+                    self.symbols = new_symbols
+                except ValueError:
+                    log.w(f'Module "{self.module}" does not appear to be installed in current path.')
 
     def set_external_path(self, new_path: str):
         log = self.logger("set_external_path")
@@ -174,11 +192,15 @@ class ImportReference(Logger):
         Will not reflect if we have an external git repo of this path
         :return: str
         """
-        return getattr(self.spec, "origin", None)
+        sp =  getattr(self.spec, "origin", None)
+        # sometimes spec.origin is just a str constant :'(
+        if sp == "built-in":
+            sp = None # report this as None
+        return sp
 
-    @property
-    def needs_resolution(self):
-        return self.resolved_path is None
+    # @property
+    # def needs_resolution(self):
+    #     return self.resolved_path is None
 
     @property
     def path(self) -> str:
@@ -186,7 +208,7 @@ class ImportReference(Logger):
         Get the most correct path for this import. Could have a relative path or could be an external path
         :return: str
         """
-        return self.external_path or self.resolved_path or getattr(self.spec, "origin", None)
+        return self.external_path or self.resolved_path or self.spec_path
 
     @property
     def origin(self):
@@ -206,7 +228,10 @@ class ImportReference(Logger):
             return f'{self._badge}{self.module}'
         else:
             # should always be singular
-            return f'From {self._badge}{self.level * "."}{self.module} Import {",".join(self.symbols)}'
+            level = self.level * "."
+            if not self.needs_resolution:
+                level = ""
+            return f'From {self._badge}{level}{self.module} Import {",".join(self.symbols)}'
 
     @property
     def _badge(self):
@@ -228,9 +253,13 @@ class ImportReference(Logger):
 
     @property
     def _spec_str(self):
+        log = self.logger("_spec_str")
         origin = "None"
         if self.path:
-            origin = PythonPathWrapper(self.path).short_version
+            try:
+                origin = PythonPathWrapper(self.path).short_version
+            except Exception:
+                log.e(f"got exception on path! self.path: {self.path}, self.spec_path: {self.spec_path}, self.resolved_path: {self.resolved_path}, self.extermal: {self.external_path}")
 
         if self.spec:
             return f'-> S[{self.spec.name}]<{origin}>'
@@ -245,9 +274,12 @@ class ImportReference(Logger):
             return f'{self._badge}Import {self.module}{self._spec_str}'
         else:
             mod_str = self.module or ""
+            level = self.level * "."
+            if not self.needs_resolution:
+                level = ""
             return '{}From {}{} Import {}{}'.format(
                 self._badge,
-                self.level * ".",
+                level,
                 mod_str,
                 ', '.join(self.symbols),
                 self._spec_str
@@ -286,6 +318,7 @@ class ImportStatement(Logger):
 
     def __init__(self, node: ast.AST, file_path: str, src: str, *kwargs):
         super().__init__(*kwargs)
+        log = self.logger("__init__")
         # print(f'ImportContex({node}m {parent_wrapper}, {src})')
         if not self.node_is_import(node):
             raise ValueError(f"ImportContext only supports Import and Import from. Not: {node}")
@@ -294,15 +327,18 @@ class ImportStatement(Logger):
         self._file_path = file_path
         self._node = node
         self._context = src
-        self.references: List[ImportReference] = None
+        self.references: List[ImportReference] = []
+        log.d(f"{file_path} -> {node}")
 
         self._make_reference()
 
     def _make_reference(self):
+        log = self.logger("_make_reference")
         try:
             if self.is_import:
                 self.references = [ImportReference(self._file_path, alias.name) for alias in self._node.names]
             else:
+                log.d(f"ImportReference({self._file_path}, {self._node.module}, {[alias.name for alias in self._node.names]}, {self._node.level})")
                 self.references = [
                     ImportReference(
                         self._file_path,
@@ -312,7 +348,7 @@ class ImportStatement(Logger):
                     )
                 ]
         except:
-            print(self._node.lineno)
+            # print(self._node.lineno)
             raise
 
     def re_contextualize(self, new_source):
@@ -465,16 +501,16 @@ class ASTWrapper(Logger):
             # if self.children: # get list of scope imports
             #     self._imports.extend(self.parent._get_scope_imports())
 
-        if self.log_node:
-            log.w("i",f'{self}')
+        if self.log_node or self.is_import:
+            log.w(f'({self.path}){self}')
 
     def _make_child_wrapper(self, element):
         wrapper = ASTWrapper(self.path, element, self, log_node = self.log_node)
 
         return wrapper
 
-    def _get_scope_imports(self):
-        return [i.re_contextualize(ImportStatement.Source_Above) for i in self._imports]
+    # def _get_scope_imports(self):
+    #     return [i.re_contextualize(ImportStatement.Source_Above) for i in self._imports]
 
     @property
     def is_import(self):
@@ -1014,13 +1050,18 @@ class ManagedASTWrapper(ASTWrapper):
 
     def set_manager(self, manager):
         log = self.logger("set_manager")
-        log.v(f"{self}")
+        named = False
         self.manager = manager
 
         for child in self.children:
             log.v(f"child: {child}")
             if child.is_import:
-                self.manager.register_import(self._make_import_statement(child))
+                stmt = self._make_import_statement(child)
+                if not named:
+                    log.d(f"{self.path}: {self.node}")
+                    named = True
+                log.d(f"  import: {child} -> {stmt}")
+                self.manager.register_import(stmt)
             if child.adds_symbol:
                 # There is a corner case here that I'm not quite sure what to do with.
                 # The easy case is when the number of names and the number of values match:
@@ -1071,12 +1112,13 @@ class ManagedASTWrapper(ASTWrapper):
 
     def _make_import_statement(self, node):
         log = self.logger("_make_import_statement")
-        log.v(f"{node}")
+        log.w(f"{node}")
         node = node
         if isinstance(node, ASTWrapper):
             node = node.node
 
-        return ImportStatement(node, self.path, self, ImportStatement.Source_Local)
+        log.w(f"ImportStatement({node}, {self.path}, local)")
+        return ImportStatement(node, self.path, ImportStatement.Source_Local)
 
     def get_symbol_values(self):
         log = self.logger("_handle_node_symbol")
@@ -1199,6 +1241,35 @@ class ManagedASTWrapper(ASTWrapper):
 
         return result
 
+class StatNode(Logger):
+    """
+    Helper class to track the statistics branching from a particular node
+    """
+
+    _NAME = "StatNode"
+
+    def __init__(self, path: str, first_line: int, last_line: int,
+                 symbol: str = None, links: List[ImportReference] = None, **kwargs):
+        super().__init__(**kwargs)
+        self.path_to_file = path
+        self.first_line = first_line
+        self.last_line = last_line
+        self.symbol = symbol
+        self.links: List[ImportReference] = []
+        if links:
+            self.links = links
+
+    @property
+    def length(self):
+        return self.last_line - self.first_line
+
+
+    def __str__(self):
+        p = PythonPathWrapper(self.path_to_file)
+        name = p.short_version
+        if self.symbol:
+            name = self.symbol
+        return f'St[{name}][{self.length}] -> [{len(self.links)}]'
 
 class SymbolManager(Logger):
     """
@@ -1207,13 +1278,13 @@ class SymbolManager(Logger):
     Knows nothing about actual files and just passes around references
     """
 
-    _Name = "Symbol"
+    _NAME = "Symbol"
 
     def __init__(self, name: str, ast: ManagedASTWrapper, **kwargs):
         super().__init__(**kwargs)
 
         self.name = name
-        self.ast = ast
+        self.ast: ManagedASTWrapper = ast
         self.scope_imports : List[ImportStatement] = []
         self.symbols: Dict[str, SymbolManager] = {}
         self._symbol_refs: Dict[str, SymbolManager] = {}
@@ -1225,21 +1296,39 @@ class SymbolManager(Logger):
         value.set_manager(self.symbols[name])
 
     def register_import(self, statement: ImportStatement) -> None:
+        # log = self.logger("register_import")
+        # log.d(f"{self.name}: {self.scope_imports} += {statement}")
         self.scope_imports.append(statement)
 
-    @property
-    def imports(self) -> List[ImportReference]:
+    def stats(self, symbol = None):
+        return StatNode(
+            self.ast.path,
+            self.ast.first_line,
+            self.ast.last_line,
+            self.name,
+            self.imports(symbol)
+        )
+
+    def imports(self, symbol = None) -> List[ImportReference]:
+        log = self.logger("imports")
+        # log.d(f"{self.name} imports()")
         imps = []
         for i in self.scope_imports:
+            # log.d(f"Adding global imports: {i.references}")
             imps.extend(i.references)
-        for c in self.symbols.values():
-            imps.extend(c.imports)
+        if symbol is not None and symbol in self.symbols:
+            # log.d(f"Adding imports for one symbol '{symbol}': {self.symbols[symbol].imports()}")
+            imps.extend(self.symbols[symbol].imports())
+        else:
+            for k, c in self.symbols.items():
+                # log.d(f"Adding imports for symbol '{k}'")
+                imps.extend(c.imports())
 
         return imps
 
     @property
     def has_imports(self) -> bool:
-        return len(self.imports) > 0
+        return len(self.imports()) > 0
 
     @property
     def symbols_with_imports(self) -> Dict[str, 'SymbolManager']:
@@ -1316,9 +1405,12 @@ class ModuleManager(Logger):
         self.symbols = SymbolManager(self.module, wrapper)
         wrapper.set_manager(self.symbols)
 
+    def get_stat(self, symbol = None):
+        return self.symbols.stats(symbol)
+
     @property
     def imports(self) -> List[ImportReference]:
-        return self.symbols.imports
+        return self.symbols.imports()
 
     @property
     def valid_import_paths(self) -> List[str]:

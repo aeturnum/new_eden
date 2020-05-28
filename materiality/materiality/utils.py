@@ -2,7 +2,7 @@
 from os.path import basename
 from pathlib import Path, PurePath
 
-from typing import Optional
+from typing import Optional, List
 
 VERBOSE = 'VERBOSE'
 DEBUG = 'DEBUG'
@@ -68,8 +68,8 @@ class LogContext:
     def _log(self, level, s):
         global log
         tab = ''
-        if self.call_count > 0:
-            tab = '  '
+        # if self.call_count > 0:
+        #     tab = '  '
         log(
             LEVELS[level],
             self._construct_log_string(),
@@ -125,9 +125,9 @@ class PythonPathWrapper(Logger):
     def __init__(self, str_path:str, **kwargs):
         super().__init__(**kwargs)
         log = self.logger("__init__")
-        log.w(f"{str_path}")
+        log.v(f"{str_path}")
         # self._o_path = Path(str_path)
-        self.path_obj = Path(str_path)
+        self.path_obj: Path = Path(str_path)
         self._root = None
         self._stem = None
         self._parse()
@@ -136,7 +136,7 @@ class PythonPathWrapper(Logger):
 
     def _parse(self):
         log = self.logger("_parse")
-        log.w(f"{self.path_obj}")
+        log.v(f"{self.path_obj}")
         parts = 1
 
         directory = self.path_obj.parent
@@ -144,8 +144,8 @@ class PythonPathWrapper(Logger):
             parts += 1
             directory = directory.parent
 
-        log.w(f"root: {self._root} -> {Path(*self.path_obj.parts[:-parts])}")
-        log.w(f"stem: {self._stem} -> {Path(*self.path_obj.parts[-parts:])}")
+        # log.w(f"root: {self._root} -> {Path(*self.path_obj.parts[:-parts])}")
+        # log.w(f"stem: {self._stem} -> {Path(*self.path_obj.parts[-parts:])}")
         self._root = Path(*self.path_obj.parts[:-parts])
         self._stem = Path(*self.path_obj.parts[-parts:])
 
@@ -165,6 +165,28 @@ class PythonPathWrapper(Logger):
 
         self._encoding = enc
         return enc
+
+    def _join_python_file(self, path: Path, name):
+
+        if '.py' not in name:
+            name = f"{name}.py"
+
+        path = path / name
+        if not path.exists():
+            raise ValueError(f"{path} does not exist!")
+
+        return path
+
+    def _is_python_file(self, path: Path, name: str):
+        if not path.is_dir():
+            return False
+
+        new_path = path / name
+        if new_path.exists() and new_path.suffix == "py":
+            return True
+        else:
+            new_path = new_path.with_suffix(".py")
+            return new_path.exists()
 
     def _does_directory_have_init(self, path: Path):
         if not path.is_dir():
@@ -197,38 +219,159 @@ class PythonPathWrapper(Logger):
 
         return self
 
+    def _merge_remainging_modules_and_symbols(self, module_parts: List[str], symbols) -> List[str]:
+        """
+        Sometimes python paths do not cleanly terminate at the file boundary, like:
+            From package.package.file import symbol
+        Instead, they will sometimes work like this:
+            From file.symbol.symbol.symbol import symbol
+
+        This makes sense, because to python there's a clean transition between package / file / symbols. The
+        system treats them all as if they are flat.
+
+        :param module_parts:
+        :param symbols:
+        :return:
+        """
+        if not module_parts:
+            return symbols
+
+        module_path = ".".join(module_parts)
+        if not symbols:
+            # easy!
+            return [module_path]
+
+        # todo: is this correct? Who knows
+        return [f"{module_path}.{symbol}" for symbol in symbols]
 
 
-    def find_relative_import(self, level, target_module):
-        dir = self.path_obj
+    def find_relative_import(self, level, target_module, symbols = None) -> List[str]:
+        """
+
+        :param level: how many levels to go up
+        :param target_module: module string
+        :param symbols: symbol string (s)
+        :return:
+        """
+        log = self.logger("find_relative_import")
+        log.d(f"{level}, {target_module}, {symbols}")
+        base_dir = self.path_obj
 
         if not level > 0:
             raise ValueError(f"Cannot find relative import with level of {level}")
 
         while level:
-            dir = dir.parent
-            if not self._does_directory_have_init(dir):
-                raise ValueError(f"Relative import call has passed into non-python directory: {dir}")
+            base_dir = base_dir.parent
+            if not self._is_python_file(base_dir, "__init__"):
+                raise ValueError(f"Relative import call has passed into non-python directory: {base_dir}")
             level -= 1
-        for ext in self._python_exts:
-            dir = dir / f'{target_module}{ext}'
-            print(dir)
-            if dir.exists() and dir.is_file():
-                self.path_obj = dir
-                self._parse()
-                return True
 
-        return False
+        # now we try to find the target file, which should include the entire module and may include the symbols
+        path_parts = []
+        if target_module:
+            if "." in target_module:
+                # break into directory names
+                path_parts.extend(target_module.split("."))
+            else:
+                # a single module
+                path_parts.append(target_module)
+
+
+        maybe_file: Path = Path(base_dir)
+        # if we have more than one path part we should iterate through the possibilities
+
+        last_pass = False
+        while path_parts:
+            # get a part out
+            part = path_parts.pop(0)
+
+            # if we find a python file early, exit
+            if self._is_python_file(maybe_file, part):
+                # we're done
+                self.path_obj = self._join_python_file(maybe_file, part)
+                self._parse()
+                return self._merge_remainging_modules_and_symbols(path_parts, symbols)
+
+            if not last_pass:
+                # when the module_path has not been consumed we expect to keep finding directories
+                if not maybe_file.exists():
+                    raise ValueError(f"Something went wrong finding a relative import! base: {base_dir}, {maybe_file} does not exist! parts: {path_parts}")
+
+                # add what we expect to be a directory
+                maybe_file = maybe_file / part
+                log.d(f"  {maybe_file}")
+
+                # mark if we are on the last pass to avoid throwing an exception if the current value of maybe_file doesn't exist
+                if len(path_parts) == 1:
+                    last_pass = True
+            else:
+                # this is the last path part and we're up to the symbols now
+                maybe_file = maybe_file / part
+                break
+
+        log.d(f"@symbols:{maybe_file}")
+        if symbols:
+            if len(symbols) == 1:
+                # symbol might be name of python file we want
+                if self._is_python_file(maybe_file, symbols[0]):
+                    self.path_obj = self._join_python_file(maybe_file, symbols[0])
+                    self._parse()
+                    return []
+
+            # this is a path to the __init__.py and the symbols are inside it
+            if not self._is_python_file(maybe_file, "__init__.py"):
+                raise ValueError(f"Expected directory {maybe_file} to be a python package with the __init__.py containing symbols: {symbols}")
+
+            self.path_obj = maybe_file / "__init__.py"
+            self._parse()
+            return symbols
+
+        if self._is_python_file(maybe_file, "__init__.py"):
+            self.path_obj = maybe_file / "__init__.py"
+            self._parse()
+            return symbols
+
+
+
+        # # one part left, let's handle it
+        # if len(path_parts) == 1:
+        #     if self._is_python_file(maybe_file, path_parts[0]):
+        #         # easy, last part of path links to a python file
+        #         self.path_obj = self._join_python_file(maybe_file, path_parts[0])
+        #         self._parse()
+        #         return symbols
+        #     else:
+        #         # time to look into symbols
+        #         maybe_file = maybe_file / path_parts[0]
+        #
+        #         if not maybe_file.exists() and maybe_file.is_dir():
+        #             raise ValueError(f"Unexpected state after path_parts in relative path search: {maybe_file} does not exist! sym:{symbols}")
+
+
+        # symbol time!
+        # this happens when you're importing from the same directory:
+        # i.e. from . import X
+        # I don't think the symbol in this scenario can be dotted so...
+
+        # if not symbols or len(symbols) != 1:
+        #     raise ValueError(f"Not sure how to deal with an import move with more than one symbol! {self}")
+        #
+        # if self._is_python_file(maybe_file, symbols[0]):
+        #     self.path_obj = self._join_python_file(maybe_file, symbols[0])
+        #     self._parse()
+        #     return []
+
+        raise ValueError(f"Could not find relative import: [{self.path_obj}] {level}, {target_module}, {symbols}")
 
     @property
     def module_guess(self):
         log = self.logger("module_guess")
-        log.w(f'{self.path_obj} | {self._stem}')
+        # log.w(f'{self.path_obj} | {self._stem}')
         parts = list(self._stem.parts[:-1])
         if self.path_obj.name != "__init__.py":
             parts.append(self.path_obj.stem)
 
-        log.w(f'{self.path_obj} -> {".".join(self._stem.parts)}')
+        log.v(f'{self.path_obj} -> {".".join(parts)}')
         return ".".join(parts)
 
     def str(self):
@@ -247,7 +390,11 @@ class PythonPathWrapper(Logger):
 
     @property
     def short_version(self):
-        return f"/{self._root[-1]}/{'/'.join(self._stem)}"
+        log = self.logger("short_version")
+
+        return f"/{self._root.parts[-1]}/{'/'.join(self._stem.parts)}"
+        # except Exception as e:
+        #     log.e(f"Raised Exception! {e}: {self.path_obj}")
 
 
     def __str__(self):
