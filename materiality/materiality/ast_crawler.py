@@ -57,7 +57,7 @@ class ImportReference(Logger):
 
 
         log = self.logger("__init__")
-        log.w(f"({module}, {symbols})")
+        log.v(f"({module}, {symbols})")
 
         self._resolve_path()
 
@@ -125,7 +125,7 @@ class ImportReference(Logger):
         return module_name, spec
 
     def _resolve_spec(self):
-        log = self.logger("_find_spec")
+        log = self.logger("_resolve_spec")
         log.v(f"")
         (found_name, spec) = self._find_spec(self.module)
 
@@ -160,9 +160,9 @@ class ImportReference(Logger):
             # try treating this like a relative import
             if not self.relative:
                 try:
+                    log.w(f"Failed to find '{self.module}', checking if it's in the current package")
                     new_path = PythonPathWrapper(self.statement_file_path)
                     new_symbols = new_path.find_relative_import(1, self.module)
-                    log.d(new_path)
                     self.resolved_path = new_path.str()
                     self.ignore_reason = None
                     self.needs_resolution = False
@@ -172,7 +172,10 @@ class ImportReference(Logger):
 
     def set_external_path(self, new_path: str):
         log = self.logger("set_external_path")
-        self.external_path = PythonPathWrapper(self.path).swap_root(new_path).str()
+        if self.path:
+            self.external_path = PythonPathWrapper(self.path).swap_root(new_path).str()
+        else:
+            self.external_path = new_path
         log.w(f"self.external_path = {self.external_path}")
 
 
@@ -245,6 +248,9 @@ class ImportReference(Logger):
 
         if self.needs_resolution:
             return '<!U>'
+
+        if not self.path:
+            return '<!P>'
 
         if self.relative:
             return '<+R>'
@@ -328,7 +334,7 @@ class ImportStatement(Logger):
         self._node = node
         self._context = src
         self.references: List[ImportReference] = []
-        log.d(f"{file_path} -> {node}")
+        log.v(f"{file_path} -> {node}")
 
         self._make_reference()
 
@@ -338,7 +344,7 @@ class ImportStatement(Logger):
             if self.is_import:
                 self.references = [ImportReference(self._file_path, alias.name) for alias in self._node.names]
             else:
-                log.d(f"ImportReference({self._file_path}, {self._node.module}, {[alias.name for alias in self._node.names]}, {self._node.level})")
+                # log.d(f"ImportReference({self._file_path}, {self._node.module}, {[alias.name for alias in self._node.names]}, {self._node.level})")
                 self.references = [
                     ImportReference(
                         self._file_path,
@@ -501,7 +507,7 @@ class ASTWrapper(Logger):
             # if self.children: # get list of scope imports
             #     self._imports.extend(self.parent._get_scope_imports())
 
-        if self.log_node or self.is_import:
+        if self.log_node:
             log.w(f'({self.path}){self}')
 
     def _make_child_wrapper(self, element):
@@ -588,7 +594,8 @@ class ASTWrapper(Logger):
             this_line_number is not None and ctx.line_number is not None
                 and this_line_number < ctx.line_number
             ): # exception time
-            raise ValueError(f"Didn't expect line numbers to go backwards: {ctx.line_number}->{this_line_number}")
+            pass
+            #raise ValueError(f"Didn't expect line numbers to go backwards: {ctx.line_number}->{this_line_number}")
 
         return (line_string, ctx)
 
@@ -1057,10 +1064,10 @@ class ManagedASTWrapper(ASTWrapper):
             log.v(f"child: {child}")
             if child.is_import:
                 stmt = self._make_import_statement(child)
-                if not named:
-                    log.d(f"{self.path}: {self.node}")
-                    named = True
-                log.d(f"  import: {child} -> {stmt}")
+                # if not named:
+                #     log.d(f"{self.path}: {self.node}")
+                #     named = True
+                # log.d(f"  import: {child} -> {stmt}")
                 self.manager.register_import(stmt)
             if child.adds_symbol:
                 # There is a corner case here that I'm not quite sure what to do with.
@@ -1112,12 +1119,12 @@ class ManagedASTWrapper(ASTWrapper):
 
     def _make_import_statement(self, node):
         log = self.logger("_make_import_statement")
-        log.w(f"{node}")
+        log.v(f"{node}")
         node = node
         if isinstance(node, ASTWrapper):
             node = node.node
 
-        log.w(f"ImportStatement({node}, {self.path}, local)")
+        # log.w(f"ImportStatement({node}, {self.path}, local)")
         return ImportStatement(node, self.path, ImportStatement.Source_Local)
 
     def get_symbol_values(self):
@@ -1139,7 +1146,7 @@ class ManagedASTWrapper(ASTWrapper):
                 try:
                     symbol_names = self._resolve_expr_symbols(symbol_member)
                 except IgnoreSymbolException as e:
-                    log.w(f'{e.message}')
+                    log.v(f'{e.message}')
                     symbol_names = []
             else:
                 # symbol is contained in an id, which is just a string, so we already have it in symbol_member
@@ -1151,9 +1158,9 @@ class ManagedASTWrapper(ASTWrapper):
                     values = self._try_explode_values(values[0])
 
                     if len(symbol_names) > 1 and len(values) == 1:
-                        log.d(f"many symbols to one value! Likely a function unpacking!\n\t\t\t\t{self}")
+                        log.v(f"many symbols to one value! Likely a function unpacking!\n\t\t\t\t{self}")
                 elif len(symbol_names) != len(values):
-                    log.w(
+                    log.v(
                         f"{len(symbol_names)}syms != {len(values)}vals! Symbol table may be flawed!\n\t\t\t\t{self}")
 
                 return symbol_names, values
@@ -1199,9 +1206,27 @@ class ManagedASTWrapper(ASTWrapper):
         return values
 
     def _resolve_expr_symbols(self, exprs):
+        """
+        This attempts to resolve the name of a symbol so that we can refer to it later.
+
+        This system has some major holes in what it can record that harm its ability to catalog the files used in a
+        python file. First, when you import a module into a file, the imported name is now available in the module's
+        symbol table. This is often used for compatability layers (among other things) - i.e. you have a python file
+        that imports one library under its python 2 name and another under its python 3 name and then harmonizes the
+        naming differences.
+
+        It also struggles to deal with long chains of dereferences or container accessses. This is kind of ok for this
+        project, as those lines seem to rarely contain an import statement, but it makes debugging frustrating.
+
+
+        :param exprs:
+        :return:
+        """
         log = self.logger("_handle_node_symbol")
         if not isinstance(exprs, list):
             exprs = [exprs]
+
+
 
         # log.v(f'Exprs: {", ".join([self.node_str(e) for e in exprs])}')
         # log.v(f'Exprs: {exprs}')
@@ -1301,11 +1326,38 @@ class SymbolManager(Logger):
         self.scope_imports.append(statement)
 
     def stats(self, symbol = None):
+        """
+        Get the stats for this manager
+        :param symbol:
+        :return:
+        """
+        log = self.logger("stats")
+        name = self.name
+        first_line = self.ast.first_line
+        last_line = self.ast.last_line
+        if symbol:
+            name = f"{name}.{symbol}"
+            if symbol in self.symbols:
+                # todo: address this
+                # There is a problem here that is obvious but also requires a total re-architecting of
+                # the system. Basically, python is fine with blowing through dereference barriers - the
+                # symbol name might be "bob" or it might be "bob.stuff.clothes.shirt.color". The latter
+                # instance should be handled by walking through the symbol chain, which might be within
+                # this file, but also might cross one or more file boundaries.
+                #
+                # There is nothing conceptually difficult about this and a better engineer would have
+                # seen it coming and created structures to help me deal with it. But I am where I am and
+                # I did not.
+
+                first_line = self.symbols[symbol].ast.first_line
+                last_line = self.symbols[symbol].ast.last_line
+            else:
+                log.e(f"{self.ast.path}: Symbol {symbol} not in {self.symbols.keys()}! {self}")
         return StatNode(
             self.ast.path,
-            self.ast.first_line,
-            self.ast.last_line,
-            self.name,
+            first_line,
+            last_line,
+            name,
             self.imports(symbol)
         )
 

@@ -14,7 +14,12 @@ def test_basic():
 
 def test_module_finder():
     # base = "/Users/ddrexler/src/python/web2py/"
-    base = "/Users/ddrexler/src/python/breitbart_comment_grabbing_server/bcgs/"
+    # base = "/Users/ddrexler/src/python/breitbart_comment_grabbing_server/bcgs/"
+    #
+    # c = DependencyFinder(base)
+    # c.crawl_file_modules("server.py")
+
+    base = "/Users/ddrexler/masters/Source//modules/s3/"
 
     c = DependencyFinder(base)
-    mc = c.crawl_file_modules("server.py")
+    c.crawl_file_modules("s3validators.py")

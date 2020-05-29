@@ -30,8 +30,10 @@ class DependencyFinder(Logger):
         while not self.mc.done:
             self.mc.step()
 
-        # stats = self.mc.get_import_tree_for_file(full_path)
-        # print(stats.report())
+        print(self.mc.report())
+
+        stats = self.mc.get_import_tree_for_file(full_path)
+        stats.report()
 
     def crawl_repo(self):
         for commit in RepositoryMining(self.base).traverse_commits():

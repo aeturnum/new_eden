@@ -4,7 +4,7 @@ from collections import namedtuple
 
 from .utils import Logger, PythonPathWrapper
 from .ast_crawler import ModuleManager, ImportReference, StatNode
-from .git_helper import GitHelper
+from .git_helper import GitHelper, File
 
 ModPaths = namedtuple("ModPaths",["common_root", "module_path", "git_path"])
 
@@ -18,45 +18,6 @@ class PathManager(Logger):
     _NAME = "PathManager"
 
     # locations
-    # _git_repos = {
-    #     'web2py': '/Users/ddrexler/src/python/web2py/',
-    #     'eden': '/Users/ddrexler/masters/Source/',
-    #     'gluon': '/Users/ddrexler/src/python/web2py/gluon/'
-    # }
-    # _module_map = {
-    #     'web2py': {
-    #         'common_root': '/Users/ddrexler/src/python/web2py/',
-    #         'module_path': 'web2py.py',
-    #         'git_path': ''
-    #     },
-    #     'eden': {
-    #         'common_root': '/Users/ddrexler/masters/Source/',
-    #         'module_path': '__init__.py',
-    #         'git_path': ''
-    #     },
-    #     'gluon': {
-    #         'common_root': '/Users/ddrexler/src/python/web2py/gluon/',
-    #         'module_path': '__init__.py',
-    #         'git_path': '../'
-    #     },
-    #     'pydal': {
-    #         'common_root': '/Users/ddrexler/src/python/web2py/gluon/packages/dal/',
-    #         'module_path': 'pydal/__init__.py',
-    #         'git_path': ''
-    #     },
-    #     'yatl': {
-    #         'common_root': '/Users/ddrexler/src/python/web2py/gluon/packages/yatl/',
-    #         'module_path': 'yatl/__init__.py',
-    #         'git_path': ''
-    #     },
-    #     'bcgs': {
-    #         'common_root': '/Users/ddrexler/src/python/breitbart_comment_grabbing_server/',
-    #         'module_path': 'bcgs/server.py',
-    #         'git_path': ''
-    #
-    #     }
-    #
-    # }
     _module_map : Dict[str, ModPaths] = {
         'web2py': ModPaths('/Users/ddrexler/src/python/web2py/', 'web2py.py', ''),
         'eden': ModPaths('/Users/ddrexler/masters/Source/', '__init__.py', ''),
@@ -71,8 +32,14 @@ class PathManager(Logger):
 
         self.path_to_module: Dict[str, ModuleManager] = {}
         # self.module_name_to_module: Dict[str, ModuleManager] = {}
-        self.git_helpers = {k:GitHelper(f'{v.common_root}/{v.git_path}') for k, v in self._module_map.items()}
-        self.git_helpers['bcgs'].index()
+        self.git_helpers: Dict[str, GitHelper] = {k:GitHelper(k, str(Path(v.common_root, v.git_path))) for k, v in self._module_map.items()}
+        self._helpers_have_been_spun = False
+
+    def crawl_git_helpers(self):
+        if not self._helpers_have_been_spun:
+            for h in self.git_helpers.values():
+                h.index()
+            self._helpers_have_been_spun = True
 
     def _search_for_module(self, full_module_path:str) -> Optional[ModPaths]:
         # todo: this needs to replace the root of the rest of the module path
@@ -124,6 +91,28 @@ class PathManager(Logger):
         self.set_external_path_if_exists(imp_ref)
         return self._get_create_mm(imp_ref.path)
 
+    def git_file_for_path(self, path: str) -> Optional[File]:
+        log = self.logger("git_file_for_path")
+        log.v(f"{path}")
+        git_key = None
+        git_path = None
+        for key, repo_paths in self._module_map.items():
+            this_path = str(Path(repo_paths.common_root, repo_paths.git_path))
+            # log.d(f"This path: {this_path}")
+            # log.d(f"Git  path: {path}")
+            # log.d(f"?in      : {this_path in path}")
+            if this_path in path:
+                # log.d(f"Found git key: {key}")
+                git_key = key
+                git_path = this_path
+
+        if git_key:
+            git_repo = self.git_helpers[git_key]
+            internal_path = path.replace(git_path, '')
+            # log.d(f"Internal path: {internal_path}")
+            return git_repo.file_from_path(internal_path)
+
+        return None
 
     def module_for_path(self, path: str) -> ModuleManager:
         log = self.logger("module_for_path")

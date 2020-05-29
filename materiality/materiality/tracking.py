@@ -1,3 +1,5 @@
+import datetime
+
 from .utils import Logger, dlog, wlog, PythonPathWrapper
 
 
@@ -8,8 +10,9 @@ class ChangeStats(Logger):
         super().__init__(**kwargs)
         self.added = added
         self.removed = removed
-        self._added = [added]
-        self._removed = [removed]
+        self.count = 0
+        # self._added = [added]
+        # self._removed = [removed]
 
     @property
     def changes(self):
@@ -19,22 +22,23 @@ class ChangeStats(Logger):
     def delta(self):
         return self.added - self.removed
 
-    @property
-    def count(self):
-        return len(self._added)
+    # @property
+    # def count(self):
+    #     return len(self._added)
 
-    def merge_change_stat(self, cs):
-        self._added.extend(cs._added)
-        self._removed.extend(cs._removed)
-        self.added += cs.added
-        self.removed += cs.removed
+    def merge_change(self, change):
+        # self._added.extend(change.stats._added)
+        # self._removed.extend(change.stats._removed)
+        self.added += change.stats.added
+        self.removed += change.stats.removed
+        self.count += 1
 
     def add_mod(self, mod):
         self.add_numbers(mod.added, mod.removed)
 
     def add_numbers(self, added, removed):
-        self._added.append(added)
-        self._removed.append(removed)
+        # self._added.append(added)
+        # self._removed.append(removed)
 
         self.added += added
         self.removed += removed
@@ -45,29 +49,81 @@ class ChangeStats(Logger):
     def __repr__(self):
         return str(self)
 
-class Author(Logger):
+class Repo:
+    def __init__(self, name, root_directory):
+        self.name = name
+        self.root_directory = root_directory
+
+    def __str__(self):
+        return f'R[{self.name}]'
+
+class ObjectAge(Logger):
+    def __init__(self,  **kwargs):
+        super().__init__(**kwargs)
+        self.age_events = []
+        self.event_index = {}
+        self.start_time = None
+        self.end_time = None
+
+    def add_event(self, date, data):
+        self.age_events.append(date)
+        self.event_index[date] = data
+
+        self.age_events = sorted(self.age_events)
+        if not self.start_time:
+            self.start_time = self.age_events[0]
+        if not self.end_time:
+            self.end_time = self.age_events[0]
+
+    def expand_time_horizon(self, event_ts:datetime):
+        if event_ts < self.start_time:
+            self.start_time = event_ts
+        if event_ts > self.end_time:
+            self.end_time = event_ts
+
+    @property
+    def age(self):
+        if len(self.age_events) > 1:
+            return self.end_time - self.age_events[0]
+
+        return None
+
+    @property
+    def created_after(self):
+        return self.age_events[0] - self.start_time
+
+    @property
+    def lifetime(self):
+        if len(self.age_events) > 2:
+            return self.age_events[-1] - self.age_events[0]
+
+        return None
+
+
+class Author(ObjectAge):
     _NAME = "Author"
 
     authors = []
 
-    @staticmethod
-    def find_author(commit_author):
-        dlog(f'Author::find_author', f'({commit_author.name, commit_author.email})')
-        for a in Author.authors:
-            if a.name == commit_author.name or a.email == commit_author.email:
-                if commit_author.name not in a.names or commit_author.email not in a.email:
-                    if commit_author.name not in a.names:
-                        wlog(f'\tAuthor::find_author', f'incomplete match[name] {commit_author.name} not in {a.names} ')
-                    if commit_author.email not in a.emails:
-                        wlog(f'\tAuthor::find_author', f'incomplete match[email] {commit_author.email} not in {a.emails}')
-                dlog(f'Author::find_author', f'found: {a}')
-                a.merge(commit_author)
-                return a
+    # @staticmethod
+    # def find_author(commit_author):
+    #     dlog(f'Author::find_author', f'({commit_author.name, commit_author.email})')
+    #     for a in Author.authors:
+    #         if a.name == commit_author.name or a.email == commit_author.email:
+    #             if commit_author.name not in a.names or commit_author.email not in a.email:
+    #                 if commit_author.name not in a.names:
+    #                     wlog(f'\tAuthor::find_author', f'incomplete match[name] {commit_author.name} not in {a.names} ')
+    #                 if commit_author.email not in a.emails:
+    #                     wlog(f'\tAuthor::find_author', f'incomplete match[email] {commit_author.email} not in {a.emails}')
+    #             dlog(f'Author::find_author', f'found: {a}')
+    #             a.merge(commit_author)
+    #             return a
+    #
+    #     return Author(commit_author.name, commit_author.email)
 
-        return Author(commit_author.name, commit_author.email)
-
-    def __init__(self, name=None, email=None, changes=None, index=None, **kwargs):
+    def __init__(self, repo: Repo, name=None, email=None, changes=None, index=None, **kwargs):
         super().__init__(**kwargs)
+        self.repo = repo
         self.names = set()
         self.emails = set()
         self.counts = {
@@ -132,9 +188,11 @@ class Author(Logger):
 
     def add_change(self, change):
         log = self.logger("add change")
-        log.d(f'<- {change}')
+        # log.d(f'<- {change}')
         self.changes.append(change)
-        self.stats.merge_change_stat(change.stats)
+        self.stats.merge_change(change)
+
+        self.add_event(change.date, change)
 
     def __str__(self):
         email = str(self.email)
@@ -145,7 +203,7 @@ class Author(Logger):
         if len(self.names) > 1:
             name += f'(+{len(self.names) - 1})'
 
-        return f'{name}<{email}>[{len(self.changes)}={self.stats}]'
+        return f'{self.repo}{name}<{email}>[{len(self.changes)}={self.stats}]'
 
     def __repr__(self):
         return str(self)
@@ -167,15 +225,14 @@ class Change(Logger):
     def __init__(self, path, added, removed, commit, **kwargs):
         super().__init__(**kwargs)
         log = self.logger("__init__")
-        self._commit = commit
         self.path = path
         self.stats = ChangeStats(added, removed)
         self.date = commit.author_date
 
         # log.d(f'Created')
 
-    def get_author_from_index(self, author_index):
-        self.author = author_index.find_author(self._commit.author)
+    def get_author_from_index(self, commit, author_index):
+        self.author = author_index.find_author(commit.author)
         self.author.add_change(self)
 
     def __str__(self):
@@ -184,7 +241,7 @@ class Change(Logger):
     def __repr__(self):
         return str(self)
 
-class File(Logger):
+class File(ObjectAge):
 
     _NAME = "File"
 
@@ -202,23 +259,25 @@ class File(Logger):
         File.files[path] = File(path)
         return File.files[path]
 
-    def __init__(self, path, **kwargs):
+    def __init__(self, repo: Repo, path, **kwargs):
         super().__init__(**kwargs)
         self.path = path
         self.changes = []
         self.authors = set()
         self.stats = ChangeStats()
+        self.repo = repo
 
-    def add_change(self, change):
+    def add_change(self, change: Change):
         log = self.logger("add_change")
         # log.d(f'Adding {change} to {self}')
         self.changes.append(change)
-        self.stats.merge_change_stat(change.stats)
+        self.stats.merge_change(change)
+        self.add_event(change.date, change)
         self.authors.add(change.author)
 
     def __str__(self):
         # p = PythonPathWrapper(self.path).short_version
-        return f'File[{self.path}][{len(self.authors)} authors]{self.stats}'
+        return f'{self.repo}File[{self.path}][{len(self.authors)} authors]{self.stats}'
 
     def __repr__(self):
         return str(self)

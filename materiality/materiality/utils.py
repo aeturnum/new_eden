@@ -254,7 +254,7 @@ class PythonPathWrapper(Logger):
         :return:
         """
         log = self.logger("find_relative_import")
-        log.d(f"{level}, {target_module}, {symbols}")
+        log.v(f"{level}, {target_module}, {symbols}")
         base_dir = self.path_obj
 
         if not level > 0:
@@ -299,7 +299,7 @@ class PythonPathWrapper(Logger):
 
                 # add what we expect to be a directory
                 maybe_file = maybe_file / part
-                log.d(f"  {maybe_file}")
+                # log.d(f"  {maybe_file}")
 
                 # mark if we are on the last pass to avoid throwing an exception if the current value of maybe_file doesn't exist
                 if len(path_parts) == 1:
@@ -309,7 +309,7 @@ class PythonPathWrapper(Logger):
                 maybe_file = maybe_file / part
                 break
 
-        log.d(f"@symbols:{maybe_file}")
+        # log.d(f"@symbols:{maybe_file}")
         if symbols:
             if len(symbols) == 1:
                 # symbol might be name of python file we want
@@ -330,36 +330,6 @@ class PythonPathWrapper(Logger):
             self.path_obj = maybe_file / "__init__.py"
             self._parse()
             return symbols
-
-
-
-        # # one part left, let's handle it
-        # if len(path_parts) == 1:
-        #     if self._is_python_file(maybe_file, path_parts[0]):
-        #         # easy, last part of path links to a python file
-        #         self.path_obj = self._join_python_file(maybe_file, path_parts[0])
-        #         self._parse()
-        #         return symbols
-        #     else:
-        #         # time to look into symbols
-        #         maybe_file = maybe_file / path_parts[0]
-        #
-        #         if not maybe_file.exists() and maybe_file.is_dir():
-        #             raise ValueError(f"Unexpected state after path_parts in relative path search: {maybe_file} does not exist! sym:{symbols}")
-
-
-        # symbol time!
-        # this happens when you're importing from the same directory:
-        # i.e. from . import X
-        # I don't think the symbol in this scenario can be dotted so...
-
-        # if not symbols or len(symbols) != 1:
-        #     raise ValueError(f"Not sure how to deal with an import move with more than one symbol! {self}")
-        #
-        # if self._is_python_file(maybe_file, symbols[0]):
-        #     self.path_obj = self._join_python_file(maybe_file, symbols[0])
-        #     self._parse()
-        #     return []
 
         raise ValueError(f"Could not find relative import: [{self.path_obj}] {level}, {target_module}, {symbols}")
 
@@ -399,3 +369,21 @@ class PythonPathWrapper(Logger):
 
     def __str__(self):
         return str(self.path_obj)
+
+
+
+#https://gist.github.com/thatalextaylor/7408395
+def td_str(seconds):
+    sign_string = '-' if seconds < 0 else ''
+    seconds = abs(int(seconds))
+    days, seconds = divmod(seconds, 86400)
+    hours, seconds = divmod(seconds, 3600)
+    minutes, seconds = divmod(seconds, 60)
+    if days > 0:
+        return '%s%dd %dh %dm %ds' % (sign_string, days, hours, minutes, seconds)
+    elif hours > 0:
+        return '%s%dh %dm %ds' % (sign_string, hours, minutes, seconds)
+    elif minutes > 0:
+        return '%s%dm %ds' % (sign_string, minutes, seconds)
+    else:
+        return '%s%ds' % (sign_string, seconds)
