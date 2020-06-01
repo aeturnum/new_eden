@@ -1,4 +1,5 @@
 import datetime
+from typing import Dict
 
 from .utils import Logger, dlog, wlog, PythonPathWrapper
 
@@ -42,6 +43,16 @@ class ChangeStats(Logger):
 
         self.added += added
         self.removed += removed
+
+    def __add__(self, other) -> 'ChangeStats':
+        if not isinstance(other, ChangeStats):
+            raise ValueError("Must add two changestats")
+
+        combo = ChangeStats()
+        combo.added = self.added + other.added
+        combo.removed = self.removed + other.removed
+        combo.count = self.count + other.count
+        return combo
 
     def __str__(self):
         return f'(+{self.added},-{self.removed})'
@@ -104,22 +115,6 @@ class Author(ObjectAge):
     _NAME = "Author"
 
     authors = []
-
-    # @staticmethod
-    # def find_author(commit_author):
-    #     dlog(f'Author::find_author', f'({commit_author.name, commit_author.email})')
-    #     for a in Author.authors:
-    #         if a.name == commit_author.name or a.email == commit_author.email:
-    #             if commit_author.name not in a.names or commit_author.email not in a.email:
-    #                 if commit_author.name not in a.names:
-    #                     wlog(f'\tAuthor::find_author', f'incomplete match[name] {commit_author.name} not in {a.names} ')
-    #                 if commit_author.email not in a.emails:
-    #                     wlog(f'\tAuthor::find_author', f'incomplete match[email] {commit_author.email} not in {a.emails}')
-    #             dlog(f'Author::find_author', f'found: {a}')
-    #             a.merge(commit_author)
-    #             return a
-    #
-    #     return Author(commit_author.name, commit_author.email)
 
     def __init__(self, repo: Repo, name=None, email=None, changes=None, index=None, **kwargs):
         super().__init__(**kwargs)
@@ -194,6 +189,24 @@ class Author(ObjectAge):
 
         self.add_event(change.date, change)
 
+    def __lt__(self, other):
+        if not isinstance(other, Author):
+            raise ValueError(f"{other} is not an Author!")
+
+        return self.stats.count < other.stats.count
+
+    def __le__(self, other):
+        if not isinstance(other, Author):
+            raise ValueError(f"{other} is not an Author!")
+
+        return self.stats.count <= other.stats.count
+
+    def __gt__(self, other):
+        if not isinstance(other, Author):
+            raise ValueError(f"{other} is not an Author!")
+
+        return self.stats.count > other.stats.count
+
     def __str__(self):
         email = str(self.email)
         name = str(self.name)
@@ -203,7 +216,7 @@ class Author(ObjectAge):
         if len(self.names) > 1:
             name += f'(+{len(self.names) - 1})'
 
-        return f'{self.repo}{name}<{email}>[{len(self.changes)}={self.stats}]'
+        return f'{self.repo}{name}<{email}>[{self.stats.count}={self.stats}]'
 
     def __repr__(self):
         return str(self)
@@ -262,18 +275,21 @@ class File(ObjectAge):
     def __init__(self, repo: Repo, path, **kwargs):
         super().__init__(**kwargs)
         self.path = path
-        self.changes = []
+        # self.changes = []
         self.authors = set()
+        self.author_changes: Dict[Author, ChangeStats] = {}
         self.stats = ChangeStats()
         self.repo = repo
 
     def add_change(self, change: Change):
         log = self.logger("add_change")
-        # log.d(f'Adding {change} to {self}')
-        self.changes.append(change)
+        # self.changes.append(change)
         self.stats.merge_change(change)
         self.add_event(change.date, change)
-        self.authors.add(change.author)
+        if change.author not in self.authors:
+            self.author_changes[change.author] = ChangeStats()
+            self.authors.add(change.author)
+        self.author_changes[change.author].merge_change(change)
 
     def __str__(self):
         # p = PythonPathWrapper(self.path).short_version

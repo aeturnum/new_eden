@@ -65,7 +65,7 @@ class GitHelper(Logger):
 
         return None
 
-    def get_file_from_modification(self, modification):
+    def get_file_from_modification(self, modification) -> File:
         path = modification.new_path
         if path is None:  # file deleted, use old path
             path = modification.old_path
@@ -75,7 +75,7 @@ class GitHelper(Logger):
 
         return self.file_index[path]
 
-    def find_author(self, commit_author):
+    def find_author(self, commit_author) -> Author:
         log = self.logger("find_author")
         # log.d(f'({commit_author.name, commit_author.email})')
         for a in self.author_index:
@@ -100,7 +100,7 @@ class GitHelper(Logger):
     def index(self):
         if not self.indexed:
             for commit in self.repo_miner.traverse_commits():
-                # self.commits.append(commit)
+
                 for m in commit.modifications:
                     f = self.get_file_from_modification(m)
                     c = Change.from_commit_and_mod(commit, m)

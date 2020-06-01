@@ -379,6 +379,10 @@ def td_str(seconds):
     days, seconds = divmod(seconds, 86400)
     hours, seconds = divmod(seconds, 3600)
     minutes, seconds = divmod(seconds, 60)
+
+    if days > 365:
+        years, days = divmod(days, 365)
+        return '%s%dy %dd %dh %dm %ds' % (sign_string, years, days, hours, minutes, seconds)
     if days > 0:
         return '%s%dd %dh %dm %ds' % (sign_string, days, hours, minutes, seconds)
     elif hours > 0:

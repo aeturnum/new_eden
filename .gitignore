@@ -1,4 +1,6 @@
 /.bzr
+*.csv
+*.xlsx
 /.bzrignore
 /cache/*
 /compiled/*

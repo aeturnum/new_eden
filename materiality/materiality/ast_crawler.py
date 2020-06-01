@@ -176,7 +176,7 @@ class ImportReference(Logger):
             self.external_path = PythonPathWrapper(self.path).swap_root(new_path).str()
         else:
             self.external_path = new_path
-        log.w(f"self.external_path = {self.external_path}")
+        # log.w(f"self.external_path = {self.external_path}")
 
 
     # just in case
@@ -660,8 +660,8 @@ class ASTWrapper(Logger):
             bases = ', '.join([self.node_str(base, ctx) for base in node.bases])
             if node.keywords:
                 print(f'Class keywords: {node.keywords}')
-            if node.decorator_list:
-                print(f'Class decorator list: {node.decorator_list}')
+            # if node.decorator_list:
+            #     print(f'Class decorator list: {node.decorator_list}')
             return f'{line_str}class {node.name}({bases}):'
         elif isinstance(node, ast.Return):
             # | Return(expr? value)

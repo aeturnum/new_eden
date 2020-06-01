@@ -3,8 +3,10 @@ from os.path import join, splitext
 from typing import Mapping, Set, List, Optional, Dict, Any, Union
 from collections import namedtuple
 import datetime
+import csv
 
 from .utils import Logger, td_str
+from .tracking import ChangeStats
 from .ast_crawler import ImportReference, ModuleManager
 from .path_manager import PathManager
 
@@ -158,19 +160,30 @@ class StatTree(Logger):
     def _collect_git_stats(self, node: _StatNode, stats: Optional[dict] = None):
         if not stats:
             stats = {
+                'count': 0,
                 'authors': set(),
+                'author_changes': {},
                 'added': 0,
                 'removed': 0,
+                'changes': 0,
                 'lifetimes': [],
                 'ages': []
             }
 
         if node.git_info:
+            # print(f"key: {node.key}, authors: {node.git_info.authors}")
             for author in node.git_info.authors:
-                stats['authors'].add(author)
+                if author not in stats['authors']:
+                    stats['authors'].add(author)
+                    stats['author_changes'][author] = ChangeStats()
 
+                stats['author_changes'][author] = stats['author_changes'][author] + node.git_info.author_changes[author]
+
+
+            stats['count'] += 1
             stats['added'] += node.git_info.stats.added
             stats['removed'] += node.git_info.stats.removed
+            stats['changes'] += node.git_info.stats.changes
 
             lifetime = node.git_info.lifetime
             age = node.git_info.age
@@ -209,18 +222,51 @@ class StatTree(Logger):
 
             count += 1
 
+        authors = list(git_stats['authors'])
+        authors = sorted(authors, reverse=True)
+        # for author in authors:
+        #     real_stats = git_stats['author_changes'][author]
+        #     author.stats = real_stats
+
+        git_percent = (git_stats['count'] / raw_stats['files']) * 100
+
+        related_changes = 0
+
+
+        with open('authors.csv', 'w', encoding="utf-8") as csvfile:
+            authorwriter = csv.writer(csvfile)
+            authorwriter.writerow([
+                'Repository', 'Top Name', 'Top Email',
+                'Related Changes', "Related Additions", "Related Removals", "Related Delta",
+                'Total Change', 'Total Additions', 'Total Removals', 'Total Delta'
+            ])
+            for author in authors:
+                total_stats : ChangeStats = author.stats
+                related_stats : ChangeStats = git_stats['author_changes'][author]
+
+                related_changes += related_stats.changes
+
+                authorwriter.writerow([
+                    author.repo.name, author.name, author.email,
+                    related_stats.changes, related_stats.added, related_stats.removed, related_stats.delta,
+                    total_stats.changes, total_stats.added, total_stats.removed, total_stats.delta
+                ])
+                author.stats = related_stats
+
+        work_percent = (related_changes / git_stats["changes"]) * 100
         print(f'----------------------------------')
         print(f'--------------Report--------------')
         print(f'----------------------------------')
-        print(f"Total files: {raw_stats['files']}")
+        print(f"Total files: {raw_stats['files']}({git_percent:.2f}% in git)")
         print(f"Total lines: {raw_stats['lines']}")
         print(f'----------------------------------')
-        print(f'Authors({len(git_stats["authors"])}):')
-        for author in git_stats['authors']:
-            print(f' {author}')
         print(f'Average age: {td_str(average.total_seconds() / count)}')
         print(f'Shortest age: {td_str(shortest.total_seconds())}')
-        print(f'Longesst age: {td_str(longest.total_seconds())}')
+        print(f'Longest age: {td_str(longest.total_seconds())}')
+        print(f'Total number of changes: {related_changes}/{git_stats["changes"]} ({work_percent:.2f})')
+        print(f'Authors({len(authors)}):')
+        for author in authors:
+            print(f' {author}')
 
 
 
@@ -261,7 +307,7 @@ class ModuleCrawler(Logger):
             # do the thing
             target = self.next_paths.pop()
             self._check_modules_for_target(target)
-            print(self.pm)
+            # print(self.pm)
             # cleanup
             self._cleanup()
             self.has_results = True
