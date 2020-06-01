@@ -351,8 +351,10 @@ class S3Model(object):
 
         if models is not None and hasattr(models, name):
             module = models.__dict__[name]
+            print(f"loading {module}...")
             for n in module.__all__:
                 model = module.__dict__[n]
+                print(f"loading {module}:{n}")
                 if type(model).__name__ == "type" and \
                    issubclass(model, S3Model):
                     model(name)
@@ -378,7 +380,9 @@ class S3Model(object):
         # Load models
         if models is not None:
             for name in models.__dict__:
+                print(f"Loading model: {name}")
                 if type(models.__dict__[name]).__name__ == "module":
+                    print(f"Loading model: {name}....loaded!")
                     cls.load(name)
 
         # Define importer tables
@@ -412,11 +416,12 @@ class S3Model(object):
             Same as db.define_table except that it does not repeat
             a table definition if the table is already defined.
         """
-
         db = current.db
         if hasattr(db, tablename):
+            print(f"define_table {tablename}...exists!")
             table = ogetattr(db, tablename)
         else:
+            print(f"define_table {tablename}...creating!")
             table = db.define_table(tablename, *fields, **args)
         return table
 

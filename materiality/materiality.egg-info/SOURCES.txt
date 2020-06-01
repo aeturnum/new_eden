@@ -1,0 +1,13 @@
+README.md
+pyproject.toml
+setup.py
+materiality/__init__.py
+materiality/manager.py
+materiality/module_crawler.py
+materiality/tracking.py
+materiality/utils.py
+materiality.egg-info/PKG-INFO
+materiality.egg-info/SOURCES.txt
+materiality.egg-info/dependency_links.txt
+materiality.egg-info/requires.txt
+materiality.egg-info/top_level.txt
