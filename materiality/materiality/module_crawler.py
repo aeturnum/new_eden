@@ -13,7 +13,7 @@ from .path_manager import PathManager
 class StatTree(Logger):
 
     _NAME = "StatCrawler"
-    _StatNode = namedtuple('StatNode', ['key', 'stats', 'git_info', 'children'])
+    _StatNode = namedtuple('StatNode', ['key','path', 'stats', 'git_info', 'children'])
 
     def __init__(self, path_manager: PathManager, **kwargs):
         super().__init__(**kwargs)
@@ -60,8 +60,8 @@ class StatTree(Logger):
         indent = "  " * len(chain)
 
         visit_key = mod_manager.module
-        if symbol:
-            visit_key = f'{visit_key}.{symbol}'
+        # if symbol:
+        #     visit_key = f'{visit_key}.{symbol}'
 
         # if visit_key in self.tree_cache:
         #     log.w(f"{indent}Using cached results for {visit_key}. Chain: {chain}")
@@ -77,11 +77,16 @@ class StatTree(Logger):
             # return f"Visit #{self.visit_counts[visit_key]} to {visit_key}"
             return None
 
+        elif mod_manager.module in self.visit_counts:
+            return None
+
         # avoid infinite recursion
         self.visit_counts[visit_key] = 1
+        path = mod_manager.path.str()
 
-        stat = mod_manager.get_stat(symbol)
-        git_info = self.pm.git_file_for_path(mod_manager.path.str())
+        # stat = mod_manager.get_stat(symbol)
+        stat = mod_manager.get_stat()
+        git_info = self.pm.git_file_for_path(path)
 
         # log.d("{}:\n{}".format(
         #     visit_key,
@@ -112,7 +117,7 @@ class StatTree(Logger):
                 if result:
                     children.append(result)
 
-        result = self._StatNode(visit_key, stat, git_info, children)
+        result = self._StatNode(visit_key, path, stat, git_info, children)
         self.tree_cache[visit_key] = result
 
         return result

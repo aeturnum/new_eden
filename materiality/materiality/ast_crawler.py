@@ -1158,9 +1158,9 @@ class ManagedASTWrapper(ASTWrapper):
                     values = self._try_explode_values(values[0])
 
                     if len(symbol_names) > 1 and len(values) == 1:
-                        log.v(f"many symbols to one value! Likely a function unpacking!\n\t\t\t\t{self}")
+                        log.w(f"many symbols to one value! Likely a function unpacking!\n\t\t\t\t{self}")
                 elif len(symbol_names) != len(values):
-                    log.v(
+                    log.w(
                         f"{len(symbol_names)}syms != {len(values)}vals! Symbol table may be flawed!\n\t\t\t\t{self}")
 
                 return symbol_names, values

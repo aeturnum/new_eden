@@ -1,7 +1,7 @@
 import datetime
-from typing import Dict
+from typing import Dict, Optional
 
-from .utils import Logger, dlog, wlog, PythonPathWrapper
+from .utils import Logger
 
 
 class ChangeStats(Logger):
@@ -55,7 +55,8 @@ class ChangeStats(Logger):
         return combo
 
     def __str__(self):
-        return f'(+{self.added},-{self.removed})'
+        return f'([{self.count}] -> {self.changes})'
+        # return f'([{self.count}]+{self.added},-{self.removed} -> {self.changes})'
 
     def __repr__(self):
         return str(self)
@@ -183,7 +184,7 @@ class Author(ObjectAge):
 
     def add_change(self, change):
         log = self.logger("add change")
-        # log.d(f'<- {change}')
+        log.d(f'[{self.email}] {self.stats} adding {change}')
         self.changes.append(change)
         self.stats.merge_change(change)
 
@@ -241,6 +242,7 @@ class Change(Logger):
         self.path = path
         self.stats = ChangeStats(added, removed)
         self.date = commit.author_date
+        self.author: Optional[Author] = None
 
         # log.d(f'Created')
 
@@ -289,6 +291,8 @@ class File(ObjectAge):
         if change.author not in self.authors:
             self.author_changes[change.author] = ChangeStats()
             self.authors.add(change.author)
+        log.d(f"[{self.path}] adding {change} to {self.author_changes[change.author]} from {change.author.name}")
+
         self.author_changes[change.author].merge_change(change)
 
     def __str__(self):
